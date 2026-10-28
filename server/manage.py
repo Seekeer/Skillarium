@@ -15,7 +15,7 @@ import skills
 
 UPDATER = Path(__file__).resolve().parents[1]
 CLIENT_FILES = ('install.sh', 'install.ps1', 'scripts/client.sh',
-                'scripts/client.ps1', 'README.md', '.gitattributes')
+                'scripts/client.ps1', 'scripts/sync-hidden.vbs', 'README.md', '.gitattributes')
 MANIFEST = '.agent-skills-client.json'
 TRAILER = 'Agent-Skills-Updater: 1'
 LOCAL_IMPORT_COMMANDS = ('register-local', 'import-local')

@@ -219,3 +219,20 @@ journalctl --user -u agent-skills-updater.service -n 30
 в `.codex/skills/`. Тесты: `python3 -m unittest discover -s tests -v`.
 `AGENT_SKILLS_PWSH=/path/to/pwsh` включает PowerShell-проверки в Linux;
 они не заменяют проверку Windows-junctions и Планировщика на реальной Windows.
+
+### Локальная проверка скрытого запуска Windows
+
+Нужны Git, Windows PowerShell 5.1+, Планировщик и Windows Script Host с VBScript.
+Из корня проекта выполните:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\verify-windows.ps1
+```
+
+Проверка создаёт временную Git-копию с пустым реестром без remote и задачу
+с уникальным именем `AgentSkills-Test-*`. Она проверяет видимость консоли
+из дочернего процесса, коды завершения 0/7, установку, миграцию с сохранением
+расписания/учётной записи/настроек, запуск планировщиком, переустановку и удаление.
+Временные файлы и задача удаляются в `finally`. Пользовательские скиллы и рабочая
+задача не меняются; секреты, сервер, БД и порты не нужны. Успех обозначается
+строками `PASS`; ошибка завершает скрипт с ненулевым кодом.
