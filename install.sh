@@ -53,7 +53,10 @@ sync_repository() {
 
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
-python3 "$repo/scripts/skills.py" install || result=1
+source "$repo/scripts/client.sh"
+export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
+install_registry || result=1
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install ]]; then exit 0; fi
 

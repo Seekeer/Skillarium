@@ -1,5 +1,6 @@
 """Integration tests: upstream -> controller registry -> client cache/links."""
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -38,6 +39,7 @@ class RegistryTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'install.sh', self.seed / 'install.sh')
         shutil.copyfile(ROOT / 'check-updates.sh', self.seed / 'check-updates.sh')
         shutil.copyfile(ROOT / 'scripts/skills.py', self.seed / 'scripts/skills.py')
+        shutil.copyfile(ROOT / 'scripts/client.sh', self.seed / 'scripts/client.sh')
         (self.seed / 'sources.json').write_text('{"version":2,"skills":{}}')
         self.register('first-skill', auto='yes')
         self.commit(self.seed, 'Initial registry')
@@ -135,8 +137,132 @@ class RegistryTests(unittest.TestCase):
         data = json.loads((self.consumer / 'sources.json').read_text())
         data['skills']['first-skill']['content_sha256'] = '0' * 64
         (self.consumer / 'sources.json').write_text(json.dumps(data))
-        self.run_cli(self.consumer, 'install', expected=1)
+        self.sync(expected=1, mode='--link-only')
         self.assertEqual(self.installed().resolve(), old)
+
+    def test_linux_client_never_invokes_python(self):
+        shims = self.root / 'no-python'
+        shims.mkdir()
+        for command in ('python', 'python3', 'py'):
+            shim = shims / command
+            shim.write_text('#!/bin/sh\necho "Python must not run" >&2\nexit 99\n')
+            shim.chmod(0o755)
+        self.env['PATH'] = str(shims) + os.pathsep + self.env['PATH']
+        self.sync()
+        self.assertTrue((self.installed() / 'SKILL.md').is_file())
+
+    def test_nested_unicode_and_binary_content_matches_controller_hash(self):
+        folder = self.upstream / 'skills/first-skill'
+        for relative in ['a/z.md', 'a-b.md', 'a.txt', '.hidden', 'папка/имя файла.md', '😀/file']:
+            path = folder / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'\x00\xff\nfile content\r\n')
+        self.commit(self.upstream, 'Nested content')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        # Remove controller cache to prove a fresh native download matches it.
+        shutil.rmtree(self.home / '.cache')
+        self.sync()
+        self.assertEqual((self.installed() / 'папка/имя файла.md').read_bytes(), b'\x00\xff\nfile content\r\n')
+
+    def test_native_single_file_download_and_hash_rejection(self):
+        source = self.root / 'downloaded.md'
+        payload = b'---\nname: file-skill\ndescription: Test\n---\nOriginal'
+        source.write_bytes(payload)
+        raw = hashlib.sha256(payload).digest()
+        digest = hashlib.sha256(b'SKILL.md\0' + raw + b'\0').hexdigest()
+        data = {'version': 2, 'skills': {'file-skill': {
+            'source': {'kind': 'url', 'url': 'https://example.invalid/SKILL.md'},
+            'revision': raw.hex(), 'content_sha256': digest, 'auto_update': False}}}
+        registry = self.consumer / 'sources.json'
+        registry.write_text(json.dumps(data))
+        shims = self.root / 'curl-fixture'
+        shims.mkdir()
+        curl = shims / 'curl'
+        curl.write_text('#!/bin/bash\nwhile (($#)); do\n'
+                        'if [[ "$1" == --output ]]; then output=$2; shift 2; else shift; fi\n'
+                        'done\ncp -- "$FIXTURE_FILE" "$output"\n')
+        curl.chmod(0o755)
+        self.env.update(PATH=str(shims) + os.pathsep + self.env['PATH'], FIXTURE_FILE=str(source))
+        self.sync(mode='--link-only')
+        installed = self.installed(name='file-skill')
+        old = installed.resolve()
+        self.assertEqual((installed / 'SKILL.md').read_bytes(), payload)
+        data['skills']['file-skill']['revision'] = '0' * 64
+        data['skills']['file-skill']['content_sha256'] = '0' * 64
+        registry.write_text(json.dumps(data))
+        self.sync(mode='--link-only', expected=1)
+        self.assertEqual(installed.resolve(), old)
+
+    @unittest.skipUnless(os.environ.get('AGENT_SKILLS_PWSH') or shutil.which('pwsh'), 'PowerShell runtime unavailable')
+    def test_powershell_parser_hash_and_pinned_download(self):
+        folder = self.upstream / 'skills/first-skill'
+        for relative in ['a/z.md', 'a-b.md', 'a.txt', 'папка/имя.md', '😀/file']:
+            path = folder / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'\x00\xff\r\ncontent')
+        self.commit(self.upstream, 'Unicode source')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.git(self.consumer, 'pull', '--ff-only')
+        single_file = self.root / 'single.md'
+        payload = b'---\nname: file-skill\ndescription: Test\n---\nSingle file'
+        single_file.write_bytes(payload)
+        file_revision = hashlib.sha256(payload).hexdigest()
+        file_digest = hashlib.sha256(b'SKILL.md\0' + bytes.fromhex(file_revision) + b'\0').hexdigest()
+        script = self.root / 'test-client.ps1'
+        script.write_text('''$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+foreach ($file in @('install.ps1', 'scripts/client.ps1')) {
+    $errors = $null; $tokens = $null
+    $null = [Management.Automation.Language.Parser]::ParseFile((Join-Path $env:TEST_PROJECT $file), [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw ($errors -join "`n") }
+}
+$repo = $env:TEST_REGISTRY
+function Invoke-Git {
+    param([string[]]$GitArgs, [string]$Directory = $repo)
+    $output = & git -C $Directory @GitArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Git operation failed.' }
+    return $output
+}
+. (Join-Path $env:TEST_PROJECT 'scripts/client.ps1')
+$cache = Join-Path $env:HOME '.powershell-cache'
+$registry = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw | ConvertFrom-Json
+$digest = Get-TreeHash -Directory $env:TEST_SKILL
+if ($digest -cne $registry.skills.'first-skill'.content_sha256) { throw 'Controller/PowerShell hashes differ.' }
+Set-Alias tar.exe tar
+function Set-SkillLinks {
+    param([string]$Name, [string]$VersionPath)
+    $expected = $registry.skills.'first-skill'.content_sha256
+    if ($Name -eq 'file-skill') { $expected = $env:TEST_FILE_HASH }
+    Assert-Version -Directory $VersionPath -Expected $expected
+    Write-Output 'VERIFIED'
+}
+Install-Registry
+function curl.exe {
+    $arguments = @($args)
+    $index = [Array]::IndexOf($arguments, '--output')
+    Copy-Item -LiteralPath $env:TEST_FILE -Destination $arguments[$index + 1]
+    $global:LASTEXITCODE = 0
+}
+$entry = [PSCustomObject]@{
+    source = [PSCustomObject]@{kind='url'; url='https://example.invalid/SKILL.md'}
+    revision = $env:TEST_FILE_REVISION
+    content_sha256 = $env:TEST_FILE_HASH
+}
+Install-SkillEntry -Name 'file-skill' -Entry $entry
+$entry.revision = '0' * 64
+$entry.content_sha256 = '0' * 64
+$rejected = $false
+try { Install-SkillEntry -Name 'file-skill' -Entry $entry }
+catch { $rejected = $true }
+if (-not $rejected) { throw 'Mismatched file revision was accepted.' }
+''')
+        env = dict(self.env, TEST_PROJECT=str(ROOT), TEST_REGISTRY=str(self.consumer), TEST_SKILL=str(folder),
+                   TEST_FILE=str(single_file), TEST_FILE_HASH=file_digest, TEST_FILE_REVISION=file_revision)
+        result = subprocess.run([os.environ.get('AGENT_SKILLS_PWSH') or shutil.which('pwsh'),
+                                 '-NoProfile', '-NonInteractive', '-File', str(script)],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('VERIFIED', result.stdout)
 
     def test_unrelated_upstream_commit_does_not_churn_registry(self):
         before = (self.seed / 'sources.json').read_bytes()

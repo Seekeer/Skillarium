@@ -57,10 +57,14 @@ Codex/OpenCode, второй — Claude Code. При обновлении пер
 
 ## Установка на компьютере
 
-Нужны **Git и Python 3.9+**, без дополнительных Python-пакетов. Доступ к
-приватным Git-источникам настройте через обычный SSH-ключ или credential
-manager пользователя; фоновые задачи не спрашивают пароли. На Linux нужны
-Bash, flock и пользовательский systemd; на Windows — Windows PowerShell 5.1+.
+**Python клиентам не нужен.** Linux использует Bash, Git, jq, curl, tar,
+sha256sum, find, sort, flock и пользовательский systemd. На Ubuntu зависимости
+можно установить через `sudo apt install git jq curl tar coreutils findutils util-linux`.
+Windows использует Git, Windows PowerShell 5.1+, штатные `tar.exe` и
+`curl.exe` (Windows 10/11). Доступ к приватным Git-источникам настройте через
+обычный SSH-ключ или credential manager пользователя; фоновые задачи не
+спрашивают пароли. Проверка и регистрация источников на i3 требуют Python 3.9+,
+без дополнительных Python-пакетов.
 
 Linux:
 
@@ -89,7 +93,8 @@ Linux-установщик внутри WSL. Запускайте под пол�
 
 ## Добавление источника
 
-В проекте доступен `$add-shared-skill`. Для ручной регистрации Git-скилла:
+Регистрация источников выполняется на i3, в том числе через проектный
+`$add-shared-skill`. Для ручной регистрации Git-скилла на i3:
 
 ```bash
 python3 scripts/skills.py register example-skill --git-url https://example.org/owner/repo.git --path skills/example-skill --ref refs/heads/main --auto-update no
@@ -163,5 +168,8 @@ python3 scripts/skills.py check --approve example-skill --expected-revision <rev
 Таймер проверки устанавливайте только на i3; клиентский таймер — на каждом ПК.
 Планировщик T3 и запуск модели для регулярных проверок больше не нужны.
 
-Проверки: `python3 -m unittest discover -s tests -v`. На Windows Python
-запускается через `py -3`, либо `python.exe`, если launcher не установлен.
+Проверки на i3: `python3 -m unittest discover -s tests -v`.
+Если установлен pwsh, тесты также проверяют PowerShell-парсер, совпадение
+хешей с контроллером и скачивание закреплённого commit. Для переносного pwsh
+задайте `AGENT_SKILLS_PWSH=/path/to/pwsh`. Это не заменяет проверку junctions
+и задания Планировщика на Windows. Python нужен только контроллеру и тестам.

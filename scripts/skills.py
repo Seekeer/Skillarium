@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Registry-only distribution; requires Python 3.9+ and Git, no packages."""
+"""Source registration/checking on i3; clients use native shell scripts."""
 import argparse
 import hashlib
 import io
@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -211,78 +210,6 @@ def materialize(name, entry, approved=True):
         return final, revision, content_hash
 
 
-def is_owned_link(path, name):
-    try:
-        resolved = path.resolve(strict=True)
-        return resolved.parent == (cache_root() / 'versions' / name).resolve()
-    except OSError:
-        return False
-
-
-def create_link(path, target):
-    if os.name == 'nt':
-        import _winapi
-        _winapi.CreateJunction(str(target), str(path))
-    else:
-        path.symlink_to(target, target_is_directory=True)
-
-
-def link_version(name, target):
-    failed = False
-    for catalog in ('.agents', '.claude'):
-        path = Path.home() / catalog / 'skills' / name
-        try:
-            if os.path.lexists(path):
-                if path.exists() and os.path.samefile(path, target):
-                    print('OK:', path)
-                    continue
-                if not is_owned_link(path, name):
-                    raise ValueError('Existing installation is not managed by this cache')
-                # Preserve edited previous versions instead of silently switching away.
-                old = path.resolve()
-                if tree_hash(old) != old.name:
-                    raise ValueError('Installed version has local edits; preserved')
-                if os.name == 'nt':
-                    # Junction replacement cannot use os.replace on Windows.
-                    os.rmdir(path)
-                    try:
-                        create_link(path, target)
-                    except Exception:
-                        create_link(path, old)
-                        raise
-                else:
-                    temporary = path.with_name('.' + name + '-new')
-                    if os.path.lexists(temporary):
-                        raise ValueError('Temporary link already exists')
-                    create_link(temporary, target)
-                    try:
-                        os.replace(temporary, path)
-                    finally:
-                        if os.path.lexists(temporary):
-                            temporary.unlink()
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                create_link(path, target)
-            print('LINKED:', path)
-        except (OSError, ValueError) as error:
-            print(f'CONFLICT {name}: {error}', file=sys.stderr)
-            failed = True
-    return not failed
-
-
-def install():
-    failed = False
-    for name, entry in load_registry()['skills'].items():
-        try:
-            target, _, _ = materialize(name, entry)
-            if not link_version(name, target):
-                failed = True
-        except Exception as error:
-            print(f'ERROR {name}: {error}', file=sys.stderr)
-            failed = True
-    return 1 if failed else 0
-
-
 def check(args):
     if args.publish and git('status', '--porcelain').strip():
         raise ValueError('Publish requires a clean repository')
@@ -333,7 +260,7 @@ def register(args):
     data = load_registry()
     if args.name in data['skills']:
         raise ValueError('Skill already registered; edit its entry explicitly')
-    source = (dict(kind='git', url=args.git_url, path=args.path, ref=args.ref)
+    source = (dict(kind='git', url=args.git_url, path=str(PurePosixPath(args.path)), ref=args.ref)
               if args.git_url else dict(kind='url', url=args.url))
     entry = dict(source=source, auto_update=args.auto_update == 'yes')
     _, revision, digest = materialize(args.name, entry, approved=False)
@@ -347,7 +274,6 @@ def register(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('install', help='Install only versions pinned in sources.json')
     checker = commands.add_parser('check', help='Check upstream versions; read-only by default')
     checker.add_argument('--apply-auto', action='store_true')
     checker.add_argument('--approve', action='append', default=[], metavar='NAME')
@@ -363,7 +289,7 @@ def main():
     registration.add_argument('--auto-update', choices=('yes', 'no'), required=True)
     args = parser.parse_args()
     try:
-        return {'install': lambda _: install(), 'check': check, 'register': register}[args.command](args)
+        return {'check': check, 'register': register}[args.command](args)
     except Exception as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 1

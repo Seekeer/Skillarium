@@ -16,8 +16,8 @@ if ($Mode -eq 'Uninstall') {
 }
 
 function Invoke-Git {
-    param([string[]]$GitArgs)
-    $output = & git -C $repo @GitArgs
+    param([string[]]$GitArgs, [string]$Directory = $repo)
+    $output = & git -C $Directory @GitArgs
     if ($LASTEXITCODE -ne 0) { throw "git failed (exit $LASTEXITCODE)." }
     return $output
 }
@@ -31,16 +31,18 @@ try {
     return
 }
 $failed = $false
+$previousEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+$previousEnv = @{}
+foreach ($key in @('GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE', 'GIT_SSH_COMMAND')) {
+    $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
 try {
+    # Prevent both registry and source Git from prompting in scheduled runs.
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $env:GCM_INTERACTIVE = 'Never'
+    if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
     if ($Mode -ne 'Link') {
-        # Prevent scheduled Git from blocking on authentication prompts.
-        $previousEnv = @{}
-        foreach ($key in @('GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE', 'GIT_SSH_COMMAND')) {
-            $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
-        }
-        $env:GIT_TERMINAL_PROMPT = '0'
-        $env:GCM_INTERACTIVE = 'Never'
-        if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
         try {
             $remotes = @(Invoke-Git -GitArgs @('remote'))
             if ($remotes -notcontains 'origin') {
@@ -55,21 +57,11 @@ try {
         } catch {
             Write-Warning $_.Exception.Message
             $failed = $true
-        } finally {
-            foreach ($key in $previousEnv.Keys) {
-                [Environment]::SetEnvironmentVariable($key, $previousEnv[$key], 'Process')
-            }
         }
     }
 
-    $python = Get-Command py.exe -ErrorAction SilentlyContinue
-    if ($python) {
-        & $python.Source -3 (Join-Path $repo 'scripts\skills.py') install
-    } else {
-        $python = Get-Command python.exe -ErrorAction Stop
-        & $python.Source (Join-Path $repo 'scripts\skills.py') install
-    }
-    if ($LASTEXITCODE -ne 0) { $failed = $true }
+    . (Join-Path $repo 'scripts\client.ps1')
+    Install-Registry
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -eq 'Install') {
         $scriptPath = Join-Path $repo 'install.ps1'
@@ -81,5 +73,9 @@ try {
         Write-Output "Installed: $taskName"
     }
 } finally {
+    [Console]::OutputEncoding = $previousEncoding
+    foreach ($key in $previousEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($key, $previousEnv[$key], 'Process')
+    }
     $lock.Dispose()
 }
