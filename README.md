@@ -37,16 +37,22 @@ WSL устанавливается отдельно через Linux-скрип�
 
 ## Git remote
 
-Локальная установка работает до публикации репозитория, но для получения
-изменений на разных компьютерах нужен общий remote и отслеживаемая ветка.
-Создайте пустой приватный репозиторий на выбранном Git-сервере, затем:
+Приватный репозиторий: [dim/agent-skills](https://gitea.example.org/dim/agent-skills).
+Для получения изменений на разных компьютерах нужен доступ к нему и
+отслеживаемая ветка `main`. Клонирование на Linux:
 
 ```bash
-git remote add origin <URL>
-git push -u origin main
+git clone https://gitea.example.org/dim/agent-skills.git ~/Dev/agent-skills
+bash ~/Dev/agent-skills/install.sh
 ```
 
-На другом компьютере клонируйте этот репозиторий и запустите установщик.
+На Windows:
+
+```powershell
+git clone https://gitea.example.org/dim/agent-skills.git C:\My\Dev\agent-skills
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\My\Dev\agent-skills\install.ps1
+```
+
 Если origin ещё не задан, скрипт сообщает об этом и подключает локальные
 файлы. При настроенном origin, но отсутствующей upstream-ветке, обновление
 завершается ошибкой. Доступ в фоне использует обычные SSH-ключи или Git
