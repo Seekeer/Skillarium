@@ -97,14 +97,19 @@ install_entry() (
     local record=$1 name kind url relative revision expected target temporary mirror key tree row mode path archive
     name=$(jq -er '.key' <<< "$record") || return 1
     kind=$(jq -er '.value.source.kind' <<< "$record") || return 1
-    url=$(jq -er '.value.source.url' <<< "$record") || return 1
+    url=$(jq -r '.value.source.url // empty' <<< "$record") || return 1
     relative=$(jq -r '.value.source.path // "."' <<< "$record") || return 1
     revision=$(jq -er '.value.revision' <<< "$record") || return 1
     expected=$(jq -er '.value.customization.content_sha256 // .value.content_sha256' <<< "$record") || return 1
     [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ && ${#name} -le 64 && "$expected" =~ ^[0-9a-f]{64}$ ]] || {
         echo 'Invalid registry name or approved hash.' >&2; return 1;
     }
-    [[ -n "$url" && "$url" != -* && "$url" != *$'\n'* && "$url" != *$'\r'* ]] || return 1
+    if [[ "$kind" != local ]]; then
+        [[ -n "$url" && "$url" != -* && "$url" != *$'\n'* && "$url" != *$'\r'* ]] || return 1
+    else
+        [[ "$relative" == "skills/$name" && "$revision" == "$expected" ]] || return 1
+        jq -e '.value.auto_update == false and .value.customization == null' <<< "$record" >/dev/null || return 1
+    fi
     target="$cache/versions/$name/$expected"
     if [[ -e "$target" || -L "$target" ]]; then
         validate_skill "$target" "$expected" || {
@@ -115,9 +120,10 @@ install_entry() (
         temporary=$(mktemp -d "${target%/*}/.download-XXXXXX") || return 1
         trap 'rm -rf -- "$temporary"' EXIT
         mkdir -- "$temporary/content" || return 1
-        if jq -e '.value.customization != null' <<< "$record" >/dev/null; then
+        if [[ "$kind" == local ]] || jq -e '.value.customization != null' <<< "$record" >/dev/null; then
             local shared_relative shared
             shared_relative=$(jq -r '.value.customization.path // empty' <<< "$record") || return 1
+            [[ "$kind" != local ]] || shared_relative="skills/$name"
             if [[ -n "$shared_relative" ]]; then
                 [[ "$shared_relative" == "skills/$name" && ! -L "$repo/skills" ]] || return 1
             else
@@ -221,12 +227,14 @@ publish_local_changes() (
         done
         [[ -n "$selected" ]] || continue
         updated=$(jq --arg name "$name" --arg digest "$selected" '
-            .skills[$name].customization = {
+            if .skills[$name].source.kind == "local" then
+                .skills[$name].revision = $digest | .skills[$name].content_sha256 = $digest
+            else .skills[$name].customization = {
                 path: ("skills/" + $name),
                 content_sha256: $digest,
                 base_sha256: .skills[$name].content_sha256,
                 base_revision: .skills[$name].revision
-            }' "$temporary/sources.json") || return 1
+            } end' "$temporary/sources.json") || return 1
         printf '%s\n' "$updated" > "$temporary/sources.json"
         changed=1
     done < <(jq -c '.skills | to_entries[]' "$repo/sources.json")
@@ -237,7 +245,7 @@ publish_local_changes() (
     while IFS= read -r -d '' destination; do
         name=${destination##*/}
         relative="skills/$name"
-        previous=$(jq -r --arg name "$name" '.skills[$name].customization.content_sha256 // empty' "$repo/sources.json") || return 1
+        previous=$(jq -r --arg name "$name" '.skills[$name] | .customization.content_sha256 // (if .source.kind == "local" then .content_sha256 else empty end)' "$repo/sources.json") || return 1
         [[ ! -L "$repo/$relative" ]] || return 1
         if [[ -e "$repo/$relative" ]]; then
             [[ -n "$previous" ]] && validate_skill "$repo/$relative" "$previous" || {
@@ -251,7 +259,7 @@ publish_local_changes() (
         # The verified old tree is in Git; replacement also records deletions.
         if [[ -d "$repo/$relative" ]]; then
             name=${destination##*/}
-            previous=$(jq -er --arg name "$name" '.skills[$name].customization.content_sha256' "$repo/sources.json") || return 1
+            previous=$(jq -er --arg name "$name" '.skills[$name] | .customization.content_sha256 // (if .source.kind == "local" then .content_sha256 else empty end)' "$repo/sources.json") || return 1
             validate_skill "$repo/$relative" "$previous" || return 1
             rm -rf -- "$repo/$relative" || return 1
         fi
