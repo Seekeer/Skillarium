@@ -235,13 +235,15 @@ def publish(paths):
     ensure_publishable()
     allowed = set(CLIENT_FILES) | {MANIFEST, 'sources.json'} | set(paths)
     # A concurrent manual edit outside managed files must not join this commit.
-    status = skills.git('status', '--porcelain', '--untracked-files=all', '-z').decode()
+    status = skills.git('-c', 'status.renames=false', 'status', '--porcelain', '--untracked-files=all', '-z').decode()
     changed = {item[3:] for item in status.split('\0') if item}
     folders = {'skills/' + name for name in skills.load_registry()['skills']}
     if any(path not in allowed and not any(path.startswith(folder + '/') for folder in folders) for path in changed):
         raise ValueError('Unrelated catalog changes detected before publication')
+    metadata = sorted(set(paths) & (set(CLIENT_FILES) | {MANIFEST, 'sources.json'}))
     if paths:
-        skills.git('add', '-f', '-A', '--', *sorted(paths))
+        if metadata:
+            skills.git('add', '-A', '--', *metadata)
         if skills.git('diff', '--cached', '--name-only').strip():
             skills.git('commit', '-m', 'Maintain skill catalog and client installers\n\n' + TRAILER)
     # Also retries a previous automation commit whose push failed.
@@ -272,14 +274,13 @@ def operate(entry, args):
                 print(entry['name'] + ': migrate shared skills to stable paths')
                 if not args.dry_run:
                     deploy(entry['path'], migration)
+                    skills.git('add', '-f', '-A', '--', *sorted(migration))
                     paths.update(migration)
         if args.command == 'resolve':
             result = skills.resolve(args)
         elif args.command == 'register-local':
             result = skills.register_local(args)
-            folder = entry['path'] / 'skills' / args.name
-            paths.update(item.relative_to(entry['path']).as_posix()
-                         for item in folder.rglob('*') if item.is_file())
+            paths.add('skills/' + args.name)
         elif args.command == 'register':
             result = skills.register(args)
         elif args.command in ('maintain', 'check', 'approve'):
@@ -323,9 +324,9 @@ def main():
             sub.add_argument('--revision', required=True)
         if command == 'resolve':
             sub.add_argument('name')
-            sub.add_argument('--revision', required=True)
+            sub.add_argument('--revision')
             sub.add_argument('--shared-hash', required=True)
-            sub.add_argument('--strategy', choices=('keep-shared', 'take-upstream'), required=True)
+            sub.add_argument('--strategy', choices=('keep-shared', 'take-upstream', 'detach'), required=True)
         if command == 'register-local':
             sub.add_argument('name')
             sub.add_argument('--directory', type=Path, required=True)
@@ -338,6 +339,8 @@ def main():
             sub.add_argument('--ref', default='refs/heads/main')
             sub.add_argument('--auto-update', choices=('yes', 'no'), required=True)
     args = parser.parse_args()
+    if args.command == 'resolve' and args.strategy != 'detach' and not args.revision:
+        parser.error('--revision is required except for --strategy detach')
     args.apply_auto = getattr(args, 'apply_auto', False)
     if args.command == 'check' and args.apply_auto:
         parser.error('Use maintain --apply-auto to apply automatic updates')

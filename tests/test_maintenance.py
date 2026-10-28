@@ -243,6 +243,62 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn('upstream three', (f.installed() / 'SKILL.md').read_text())
         self.assertNotIn('customization', json.loads((f.seed / 'sources.json').read_text())['skills']['first-skill'])
 
+    def test_ignored_runtime_files_stay_private_during_server_updates(self):
+        f = self.fixture
+        self.manage('deploy-client', '--publish')
+        (f.seed / '.git/info/exclude').write_text('*.private\n')
+        private = f.seed / 'skills/first-skill/runtime.private'
+        private.write_text('local-runtime-data')
+        before = (f.seed / 'sources.json').read_bytes()
+        self.manage('maintain', '--apply-auto', '--publish')
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
+        f.write_skill('first-skill', 'upstream two')
+        f.commit(f.upstream, 'Update')
+        self.manage('maintain', '--apply-auto', '--publish')
+        self.assertEqual(private.read_text(), 'local-runtime-data')
+        self.assertNotIn('runtime.private', f.git(f.remote, 'ls-tree', '-r', '--name-only', 'HEAD'))
+        backups = list((f.seed / '.git/skill-backups').glob('*/content/SKILL.md'))
+        self.assertTrue(any('version one' in item.read_text() for item in backups))
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+
+    def test_writes_to_open_old_file_survive_server_replacement(self):
+        f = self.fixture
+        self.manage('deploy-client', '--publish')
+        path = f.seed / 'skills/first-skill/SKILL.md'
+        with path.open('a') as stream:
+            f.write_skill('first-skill', 'upstream two')
+            f.commit(f.upstream, 'Update')
+            self.manage('maintain', '--apply-auto', '--publish')
+            stream.write('\nLATE WRITE TO OPEN FILE')
+            stream.flush()
+        self.assertIn('upstream two', path.read_text())
+        backups = list((f.seed / '.git/skill-backups').glob('*/content/SKILL.md'))
+        self.assertTrue(any('LATE WRITE TO OPEN FILE' in item.read_text() for item in backups))
+
+    def test_deleted_upstream_can_be_detached_without_network(self):
+        f = self.fixture
+        self.manage('deploy-client', '--publish')
+        path = f.seed / 'skills/first-skill/SKILL.md'
+        path.write_text(path.read_text() + '\nOur customization')
+        f.commit(f.seed, 'Customization')
+        f.git(f.seed, 'push')
+        shutil.rmtree(f.upstream / 'skills/first-skill')
+        f.commit(f.upstream, 'Delete skill')
+        self.manage('maintain', '--apply-auto', '--publish', expected=1)
+        report = json.loads((f.seed / '.git/skill-updates.json').read_text())['first-skill']
+        f.upstream.rename(f.root / 'upstream-offline')
+        self.manage('resolve', 'first-skill', '--shared-hash', '0' * 64,
+                    '--strategy', 'detach', '--publish', expected=1)
+        self.manage('resolve', 'first-skill', '--shared-hash', report['shared']['content_sha256'],
+                    '--strategy', 'detach', '--publish')
+        self.manage('maintain', '--apply-auto', '--publish')
+        entry = json.loads((f.seed / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(entry['source'], dict(kind='local', path='skills/first-skill'))
+        self.assertFalse(entry['auto_update'])
+        self.assertNotIn('customization', entry)
+        f.sync()
+        self.assertIn('Our customization', (f.installed() / 'SKILL.md').read_text())
+
     def test_client_deployment_upgrade_and_repeat_preserve_registry(self):
         f = self.fixture
         registry = (f.seed / 'sources.json').read_bytes()

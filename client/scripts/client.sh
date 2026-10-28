@@ -61,7 +61,7 @@ migrate_legacy_links() {
             [[ "$actual" != "$baseline" ]] || continue
             [[ -f "$old/SKILL.md" ]] || { echo "Legacy deletion preserved: $name" >&2; return 1; }
             expected=$(jq -er --arg name "$name" '.skills[$name] | .customization.content_sha256 // .content_sha256' "$repo/sources.json") || return 1
-            if [[ $(tree_hash "$folder") == "$actual" ]]; then continue; fi
+            if [[ $(tree_hash "$folder") == "$actual" ]]; then link_version "$name" || return 1; continue; fi
             if [[ "$expected" != "$baseline" || $(tree_hash "$folder") != "$baseline" ]]; then
                 echo "CONFLICT: legacy edits differ from catalog; preserved: $old" >&2; return 1
             fi
@@ -74,14 +74,15 @@ migrate_legacy_links() {
             fi
             rm -rf -- "$folder"
             mv -- "$staged" "$folder" || return 1
+            link_version "$name" || return 1
         done
     done < <(skill_names)
 }
 
 publish_local_changes() {
-    local row path name relative names
+    local row path name
     local -a paths=()
-    names=$(skill_names) || return 1
+    skill_names >/dev/null || return 1
     # A manually staged change belongs to the user, not this automatic commit.
     [[ -z $(git -C "$repo" diff --cached --name-only) ]] || { echo 'Staged changes preserved.' >&2; return 1; }
     while IFS= read -r -d '' row; do
@@ -90,28 +91,45 @@ publish_local_changes() {
         name=${path#skills/}; name=${name%%/*}
         jq -e --arg name "$name" '.skills | has($name)' "$repo/sources.json" >/dev/null || return 1
         check_skill "$name" || return 1
-    done < <(git -C "$repo" status --porcelain --untracked-files=all -z)
-    [[ -n $(git -C "$repo" status --porcelain --untracked-files=all) ]] || return 0
-    while IFS= read -r name; do
-        [[ -n "$name" ]] && paths+=("skills/$name")
-    done <<< "$names"
-    ((${#paths[@]})) || return 1
-    git -C "$repo" add -f -A -- "${paths[@]}" || return 1
+        paths+=(":(literal)$path")
+    done < <(git -C "$repo" -c status.renames=false status --porcelain --untracked-files=all -z)
+    ((${#paths[@]})) || return 0
+    git -C "$repo" add -A -- "${paths[@]}" || return 1
     git -C "$repo" -c user.name=agent-skills -c user.email=agent-skills@localhost commit \
         -m $'Share local skill edits\n\nAgent-Skills-Client: 1' || return 1
 }
 
-push_pending() {
+assert_automatic_commits() {
     local revision message pending
     pending=$(git -C "$repo" rev-list '@{upstream}..HEAD') || return 1
-    [[ -n "$pending" ]] || return 0
     while IFS= read -r revision; do
+        [[ -n "$revision" ]] || continue
         message=$(git -C "$repo" show -s --format=%B "$revision") || return 1
         [[ "$message" == *$'\nAgent-Skills-Client: 1' ]] || { echo 'Unpublished manual commits preserved.' >&2; return 1; }
     done <<< "$pending"
-    git -C "$repo" -c credential.interactive=false push || {
-        echo 'Git publication failed; local commit preserved. Divergence requires manual resolution.' >&2; return 1;
-    }
+}
+
+reconcile_repository() {
+    local temporary merged result=0
+    if git -C "$repo" merge-base --is-ancestor '@{upstream}' HEAD; then return 0; fi
+    if git -C "$repo" merge-base --is-ancestor HEAD '@{upstream}'; then
+        git -C "$repo" merge --ff-only --no-overwrite-ignore '@{upstream}'
+        return $?
+    fi
+    # Merge in a disposable worktree so conflicts never enter installed skills.
+    temporary=$(mktemp -d "$(git -C "$repo" rev-parse --absolute-git-dir)/client-merge-XXXXXX") || return 1
+    if ! git -C "$repo" worktree add --detach "$temporary" HEAD; then rmdir "$temporary"; return 1; fi
+    if git -C "$temporary" -c user.name=agent-skills -c user.email=agent-skills@localhost \
+        -c core.hooksPath=/dev/null merge --no-ff --no-edit \
+        -m $'Reconcile shared skill edits\n\nAgent-Skills-Client: 1' "$(git -C "$repo" rev-parse '@{upstream}')"; then
+        merged=$(git -C "$temporary" rev-parse HEAD) || result=1
+        if ((result == 0)); then git -C "$repo" merge --ff-only --no-overwrite-ignore "$merged" || result=1; fi
+    else
+        echo 'CONFLICT: local commit preserved; installed files unchanged. Resolve Git history manually.' >&2
+        result=1
+    fi
+    git -C "$repo" worktree remove --force "$temporary" || return 1
+    return "$result"
 }
 
 sync_repository() {
@@ -120,19 +138,22 @@ sync_repository() {
     fi
     git -C "$repo" symbolic-ref -q HEAD >/dev/null || return 1
     git -C "$repo" rev-parse --verify '@{upstream}' >/dev/null || return 1
-    # Never include earlier manual commits when publishing fresh edits.
-    local revision message
-    for revision in $(git -C "$repo" rev-list '@{upstream}..HEAD'); do
-        message=$(git -C "$repo" show -s --format=%B "$revision") || return 1
-        [[ "$message" == *$'\nAgent-Skills-Client: 1' ]] || { echo 'Unpublished manual commits preserved.' >&2; return 1; }
+    assert_automatic_commits || return 1
+    migrate_legacy_links || return 1
+    publish_local_changes || return 1
+    local attempt pending
+    for attempt in 1 2; do
+        git -C "$repo" -c credential.interactive=false fetch origin || return 1
+        assert_automatic_commits || return 1
+        reconcile_repository || return 1
+        migrate_legacy_links || return 1
+        publish_local_changes || return 1
+        pending=$(git -C "$repo" rev-list '@{upstream}..HEAD') || return 1
+        [[ -n "$pending" ]] || return 0
+        if git -C "$repo" -c credential.interactive=false push; then return 0; fi
     done
-    migrate_legacy_links || return 1
-    publish_local_changes || return 1
-    push_pending || return 1
-    git -C "$repo" -c credential.interactive=false pull --ff-only || return 1
-    migrate_legacy_links || return 1
-    publish_local_changes || return 1
-    push_pending
+    echo 'Git publication failed; local commit preserved for retry.' >&2
+    return 1
 }
 
 link_version() {

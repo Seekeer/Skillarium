@@ -73,6 +73,11 @@ def validate_entry(name, entry):
         raise ValueError('Invalid skill name')
     if not isinstance(entry.get('auto_update'), bool):
         raise ValueError('auto_update must be true or false')
+    for record in (entry, entry.get('customization') or {}):
+        if not isinstance(record, dict):
+            raise ValueError('Invalid customization')
+        if 'executable_sha256' in record and (not isinstance(record['executable_sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', record['executable_sha256'])):
+            raise ValueError('Invalid executable hash')
     custom = entry.get('customization')
     if custom is not None:
         if not isinstance(custom, dict) or any(not re.fullmatch(r'[0-9a-f]{64}', custom.get(key, ''))
@@ -123,9 +128,27 @@ def validate_skill(path, name):
         raise ValueError('Missing description')
 
 
-def tree_hash(path):
+def content_paths(path, catalog=False):
+    if not catalog:
+        return sorted(path.rglob('*'))
+    relative = path.relative_to(ROOT).as_posix()
+    names = git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', relative)
+    paths = {ROOT / os.fsdecode(name) for name in names.split(b'\0') if name}
+    return sorted(item for item in paths if item.exists() or item.is_symlink())
+
+
+def executable_hash(path, catalog=False):
     digest = hashlib.sha256()
-    for item in sorted(path.rglob('*')):
+    for item in content_paths(path, catalog):
+        if item.is_file():
+            digest.update(item.relative_to(path).as_posix().encode() + b'\0')
+            digest.update(b'x' if item.stat().st_mode & 0o111 else b'-')
+    return digest.hexdigest()
+
+
+def tree_hash(path, catalog=False):
+    digest = hashlib.sha256()
+    for item in content_paths(path, catalog):
         if item.is_symlink():
             raise ValueError('Symlinks in source skills are not supported')
         if item.is_file():
@@ -204,10 +227,11 @@ def materialize(name, entry, approved=True):
         raise ValueError('Missing approved content_sha256')
     version_dir = cache_root() / 'upstream-versions' / name
     version_dir.mkdir(parents=True, exist_ok=True)
-    if approved:
-        cached = version_dir / expected
+    expected_modes = (custom or entry).get('executable_sha256') if approved else None
+    if approved and expected_modes:
+        cached = version_dir / (expected + '-' + expected_modes)
         if cached.exists():
-            if tree_hash(cached) != expected:
+            if tree_hash(cached) != expected or executable_hash(cached) != expected_modes:
                 raise ValueError('Cached skill has local edits; preserved')
             validate_skill(cached, name)
             return cached, revision, expected
@@ -230,23 +254,27 @@ def materialize(name, entry, approved=True):
         content_hash = tree_hash(folder)
         if approved and content_hash != expected:
             raise ValueError('Downloaded content differs from approved version')
-        final = version_dir / content_hash
+        modes = executable_hash(folder)
+        if approved and expected_modes and modes != expected_modes:
+            raise ValueError('Downloaded executable modes differ from approved version')
+        final = version_dir / (content_hash + '-' + modes)
         if final.exists():
-            if tree_hash(final) != content_hash:
+            if tree_hash(final) != content_hash or executable_hash(final) != modes:
                 raise ValueError('Cached skill has local edits; preserved')
         else:
             folder.rename(final)
         return final, revision, content_hash
 
 
-def validate_local_content(folder, name):
+def validate_local_content(folder, name, catalog=False):
     """Validate native-client portability before a local folder enters Git."""
     if folder.is_symlink() or not folder.is_dir():
         raise ValueError('Local skill must be a regular directory')
     total = 0
-    for item in folder.rglob('*'):
+    for item in content_paths(folder, catalog):
         parts = item.relative_to(folder).parts
-        if (item.is_symlink() or not (item.is_file() or item.is_dir())
+        if (any(parent.is_symlink() for parent in (item, *item.parents) if parent != ROOT and ROOT in parent.parents)
+                or item.is_symlink() or not (item.is_file() or item.is_dir())
                 or any(part in ('.git', '.gitattributes') or part.endswith((' ', '.'))
                        or any(ord(char) < 32 or char in '\\:' for char in part) for part in parts)):
             raise ValueError('Unsupported local skill file or path')
@@ -254,8 +282,10 @@ def validate_local_content(folder, name):
             total += item.stat().st_size
             if total > MAX_DOWNLOAD:
                 raise ValueError('Skill exceeds 32 MiB limit')
+    if catalog and folder / 'SKILL.md' not in content_paths(folder, catalog=True):
+        raise ValueError('SKILL.md is ignored by Git; registration stopped')
     validate_skill(folder, name)
-    return tree_hash(folder)
+    return tree_hash(folder, catalog)
 
 
 def local_skill(name, entry):
@@ -263,7 +293,7 @@ def local_skill(name, entry):
     folder = ROOT / entry['source']['path']
     if (ROOT / 'skills').is_symlink():
         raise ValueError('Local skill path contains a symlink')
-    if validate_local_content(folder, name) != entry['content_sha256']:
+    if validate_local_content(folder, name, catalog=True) != entry['content_sha256']:
         raise ValueError('Local skill content differs from its registered hash')
     return folder
 
@@ -294,7 +324,9 @@ def register_local(args):
             if validate_local_content(staged, args.name) != content_hash:
                 raise ValueError('Local skill changed during import; retry')
             staged.rename(destination)
-    entry.update(revision=content_hash, content_sha256=content_hash)
+    git('add', '-A', '--', 'skills/' + args.name)
+    content_hash = validate_local_content(destination, args.name, catalog=True)
+    entry.update(revision=content_hash, content_sha256=content_hash, executable_sha256=executable_hash(destination, catalog=True))
     data['skills'][args.name] = entry
     save_registry(data)
     print('Registered local skill:', args.name)
@@ -311,7 +343,7 @@ def shared_skill(name, entry):
             break
         if path.is_symlink():
             raise ValueError('Shared skill path contains a symlink')
-    if not folder.is_dir() or tree_hash(folder) != expected:
+    if not folder.is_dir() or tree_hash(folder, catalog=relative == 'skills/' + name) != expected:
         raise ValueError('Shared skill content differs from its hash')
     validate_skill(folder, name)
     return folder
@@ -324,8 +356,32 @@ def catalog_folder(name):
     return folder
 
 
-def store_catalog_skill(name, source):
-    """Replace a server-owned skill; the caller has checked a clean Git tree."""
+def folder_state(folder):
+    if not folder.exists():
+        return None
+    return tree_hash(folder), executable_hash(folder)
+
+
+def stage_verified_payload(name, source):
+    """Stage only imported bytes, never runtime files from the editable tree."""
+    prefix = 'skills/' + name
+    tracked = git('ls-files', '-z', '--', prefix).split(b'\0')
+    records = [b'0 ' + b'0' * 40 + b'\t' + path + b'\0' for path in tracked if path]
+    for item in content_paths(source):
+        if not item.is_file():
+            continue
+        path = prefix + '/' + item.relative_to(source).as_posix()
+        blob = git('hash-object', '-w', '--no-filters', '--', str(item)).strip()
+        mode = b'100755' if item.stat().st_mode & 0o111 else b'100644'
+        records.append(mode + b' ' + blob + b'\t' + os.fsencode(path) + b'\0')
+    result = subprocess.run(['git', '-C', str(ROOT), 'update-index', '-z', '--index-info'],
+                            input=b''.join(records), capture_output=True, timeout=120)
+    if result.returncode:
+        raise ValueError('Could not stage verified skill payload')
+
+
+def store_catalog_skill(name, source, expected_state=None):
+    """Preserve the previous tree, including open-file writes and ignored files."""
     validate_local_content(source, name)
     target = catalog_folder(name)
     if source == target:
@@ -334,10 +390,42 @@ def store_catalog_skill(name, source):
     with tempfile.TemporaryDirectory(dir=target.parent, prefix='.skill-') as temporary:
         staged = Path(temporary) / 'content'
         shutil.copytree(source, staged)
-        validate_local_content(staged, name)
         if target.exists():
-            shutil.rmtree(target)
-        staged.rename(target)
+            ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard',
+                          '--', 'skills/' + name)
+            for value in ignored.split(b'\0'):
+                if not value:
+                    continue
+                item = ROOT / os.fsdecode(value)
+                destination = staged / item.relative_to(target)
+                if destination.exists() or destination.is_symlink():
+                    raise ValueError('Upstream overlaps ignored local file; preserved: ' + str(item))
+                if item.is_symlink() or not item.is_file():
+                    raise ValueError('Unsupported ignored file preserved: ' + str(item))
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, destination)
+        validate_local_content(staged, name)
+        if folder_state(target) != expected_state:
+            raise ValueError('Skill changed during update; local edits preserved')
+        backup = None
+        if target.exists():
+            backup_root = Path(git('rev-parse', '--absolute-git-dir').decode().strip()) / 'skill-backups'
+            backup_root.mkdir(exist_ok=True)
+            backup = Path(tempfile.mkdtemp(prefix=name + '-', dir=backup_root)) / 'content'
+            target.rename(backup)
+            if folder_state(backup) != expected_state:
+                backup.rename(target)
+                raise ValueError('Skill changed during replacement; local edits preserved')
+        try:
+            staged.rename(target)
+        except BaseException:
+            if backup is not None and not target.exists():
+                backup.rename(target)
+            raise
+        stage_verified_payload(name, source)
+        if backup is not None:
+            print(f'{name}: previous folder preserved at {backup}')
+        # Retain backup: an editor may still have an open file in the old tree.
 
 
 def prepare_catalog_skill(name, entry, write=False):
@@ -354,22 +442,36 @@ def prepare_catalog_skill(name, entry, write=False):
             store_catalog_skill(name, folder)
             folder = catalog_folder(name)
             copied = True
-    actual = validate_local_content(folder, name)
+    in_catalog = folder == catalog_folder(name)
+    state = folder_state(folder)
+    actual = validate_local_content(folder, name, catalog=in_catalog)
+    modes = executable_hash(folder, catalog=in_catalog)
+    if entry['source']['kind'] != 'local' and 'executable_sha256' not in entry:
+        if entry['source']['kind'] == 'url':
+            # Single-file HTTPS imports always start as a non-executable SKILL.md.
+            entry['executable_sha256'] = hashlib.sha256(b'SKILL.md\0-').hexdigest()
+        else:
+            base_entry = dict(entry)
+            base_entry.pop('customization', None)
+            baseline = materialize(name, base_entry)[0]
+            entry['executable_sha256'] = executable_hash(baseline)
+    if folder_state(folder) != state:
+        raise ValueError('Skill changed during inspection; local edits preserved')
     if entry['source']['kind'] == 'local':
-        entry.update(revision=actual, content_sha256=actual)
-    elif actual == entry['content_sha256']:
+        entry.update(revision=actual, content_sha256=actual, executable_sha256=modes)
+    elif actual == entry['content_sha256'] and modes == entry['executable_sha256']:
         entry.pop('customization', None)
     else:
         entry['customization'] = dict(path='skills/' + name, content_sha256=actual,
-            base_revision=entry['revision'], base_sha256=entry['content_sha256'])
-    return folder, before != json.dumps(entry, sort_keys=True), copied
+            base_revision=entry['revision'], base_sha256=entry['content_sha256'], executable_sha256=modes)
+    return folder, before != json.dumps(entry, sort_keys=True), copied, state
 
 
 def populate_catalog(write=False):
     data = load_registry()
     changed = False
     for name, entry in data['skills'].items():
-        _, observed, copied = prepare_catalog_skill(name, entry, write)
+        _, observed, copied, _ = prepare_catalog_skill(name, entry, write)
         changed |= observed
         if copied or not catalog_folder(name).exists():
             print(f'{name}: populate skills/{name}')
@@ -393,7 +495,7 @@ def check(args):
     failed = False
     for name, entry in data['skills'].items():
         try:
-            shared, observed, copied = prepare_catalog_skill(name, entry, write)
+            shared, observed, copied, state = prepare_catalog_skill(name, entry, write)
             changed |= observed
             payload_changed |= copied
             if entry['source']['kind'] == 'local':
@@ -416,7 +518,8 @@ def check(args):
             if name in args.approve and args.expected_revision and revision != args.expected_revision:
                 raise ValueError('Source moved since review; expected revision differs')
             status = 'customized' if entry.get('customization') else 'unchanged'
-            if digest != entry['content_sha256']:
+            incoming_modes = executable_hash(incoming)
+            if digest != entry['content_sha256'] or incoming_modes != entry['executable_sha256']:
                 if entry.get('customization'):
                     reports[name] = dict(status='upstream-conflict',
                         base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
@@ -427,8 +530,8 @@ def check(args):
                     continue
                 status = 'available'
                 if name in args.approve or (args.apply_auto and entry['auto_update']):
-                    store_catalog_skill(name, incoming)
-                    entry.update(revision=revision, content_sha256=digest)
+                    store_catalog_skill(name, incoming, expected_state=state)
+                    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(incoming))
                     changed = payload_changed = True
                     status = 'updated'
             reports[name] = dict(status=status, revision=revision, content_sha256=digest)
@@ -448,8 +551,7 @@ def check(args):
     print(f'Checked {len(reports)} source(s); report: {report_path}')
     if args.publish:
         if write and (changed or payload_changed):
-            paths = ['sources.json'] + ['skills/' + name for name in data['skills'] if catalog_folder(name).exists()]
-            git('add', '-f', '-A', '--', *paths)
+            git('add', '--', 'sources.json')
             git('commit', '-m', 'Update approved skills and source metadata')
         git('push')
     return 1 if failed else 0
@@ -460,7 +562,18 @@ def resolve(args):
     entry = data['skills'].get(args.name)
     if not entry or entry['source']['kind'] == 'local':
         raise ValueError('Skill has no external source')
-    prepare_catalog_skill(args.name, entry)
+    if args.strategy == 'detach':
+        folder = catalog_folder(args.name)
+        actual = validate_local_content(folder, args.name, catalog=True)
+        if actual != args.shared_hash:
+            raise ValueError('Shared customization moved since review')
+        data['skills'][args.name] = dict(source=dict(kind='local', path='skills/' + args.name),
+            auto_update=False, revision=actual, content_sha256=actual,
+            executable_sha256=executable_hash(folder, catalog=True))
+        save_registry(data)
+        print(f'{args.name}: resolved (detach; kept as local skill)')
+        return 0
+    _, _, _, state = prepare_catalog_skill(args.name, entry)
     if not entry.get('customization'):
         raise ValueError('Skill has no shared customization')
     if entry['customization']['content_sha256'] != args.shared_hash:
@@ -468,10 +581,12 @@ def resolve(args):
     incoming, revision, digest = materialize(args.name, entry, approved=False)
     if revision != args.revision:
         raise ValueError('Source moved since review')
-    shared = shared_skill(args.name, entry)
-    entry.update(revision=revision, content_sha256=digest)
+    shared_skill(args.name, entry)
+    if folder_state(catalog_folder(args.name)) != state:
+        raise ValueError('Skill changed during resolution; local edits preserved')
+    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(incoming))
     if args.strategy == 'take-upstream':
-        store_catalog_skill(args.name, incoming)
+        store_catalog_skill(args.name, incoming, expected_state=state)
         del entry['customization']
     else:
         entry['customization'].update(base_revision=revision, base_sha256=digest)
@@ -491,7 +606,7 @@ def register(args):
     if catalog_folder(args.name).exists():
         raise ValueError('Existing skill folder preserved; choose another name')
     store_catalog_skill(args.name, folder)
-    entry.update(revision=revision, content_sha256=digest)
+    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(folder))
     data['skills'][args.name] = entry
     save_registry(data)
     print('Registered:', args.name)

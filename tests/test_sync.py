@@ -192,6 +192,142 @@ class RegistryTests(unittest.TestCase):
         self.sync()
         self.assertFalse((self.installed() / 'reference.md').exists())
 
+    def test_ignored_files_are_not_published_with_visible_edits(self):
+        self.sync()
+        (self.consumer / '.git/info/exclude').write_text('*.private\n')
+        private = self.installed() / 'credentials.private'
+        private.write_text('dummy-local-private-data')
+        skill = self.installed() / 'SKILL.md'
+        skill.write_text(skill.read_text() + '\nOur normal edit')
+        self.sync()
+        tracked = self.git(self.remote, 'ls-tree', '-r', '--name-only', 'HEAD')
+        self.assertNotIn('credentials.private', tracked)
+        self.assertEqual(private.read_text(), 'dummy-local-private-data')
+        self.assertEqual(self.git(self.consumer, 'status', '--porcelain'), '')
+
+    def test_independent_station_changes_merge_without_rewriting_history(self):
+        self.sync()
+        local = self.installed() / 'local.sh'
+        local.write_text('echo local\n')
+        remote = self.seed / 'skills/first-skill/remote.sh'
+        remote.write_text('echo remote\n')
+        self.commit(self.seed, 'Other station independent edit')
+        remote_revision = self.git(self.seed, 'rev-parse', 'HEAD')
+        self.git(self.seed, 'push')
+        self.sync()
+        self.assertEqual((self.installed() / 'remote.sh').read_text(), 'echo remote\n')
+        self.assertEqual(local.read_text(), 'echo local\n')
+        self.git(self.consumer, 'merge-base', '--is-ancestor', remote_revision, 'HEAD')
+        self.assertEqual(len(self.git(self.consumer, 'show', '-s', '--format=%P', 'HEAD').split()), 2)
+        self.assertIn('local.sh', self.git(self.remote, 'ls-tree', '-r', '--name-only', 'HEAD'))
+        self.sync()
+        self.assertEqual(self.git(self.consumer, 'status', '--porcelain'), '')
+        self.assertEqual(len(self.git(self.consumer, 'worktree', 'list').splitlines()), 1)
+
+    def test_upstream_executable_only_update_is_published(self):
+        script = self.upstream / 'skills/first-skill/run.sh'
+        script.write_text('#!/bin/sh\necho works\n')
+        script.chmod(0o644)
+        self.commit(self.upstream, 'Add script')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        previous = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']
+        # Old catalogs have no executable hash; derive the baseline from the pin.
+        registry = json.loads((self.seed / 'sources.json').read_text())
+        registry['skills']['first-skill'].pop('executable_sha256')
+        (self.seed / 'sources.json').write_text(json.dumps(registry))
+        self.commit(self.seed, 'Legacy metadata without mode hash')
+        self.git(self.seed, 'push')
+        script.chmod(0o755)
+        self.commit(self.upstream, 'Make script executable')
+        self.assertIn('updated', self.run_cli(self.seed, 'check', '--apply-auto', '--publish'))
+        current = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(current['content_sha256'], previous['content_sha256'])
+        self.assertNotEqual(current['executable_sha256'], previous['executable_sha256'])
+        self.assertEqual(current['revision'], self.git(self.upstream, 'rev-parse', 'HEAD'))
+        self.sync()
+        self.assertTrue((self.installed() / 'run.sh').stat().st_mode & 0o111)
+
+    def test_upstream_tracked_files_are_imported_even_when_source_ignores_them(self):
+        folder = self.upstream / 'skills/first-skill'
+        (folder / '.gitignore').write_text('generated.txt\n*.private\n')
+        (folder / 'generated.txt').write_text('tracked upstream payload')
+        self.git(self.upstream, 'add', '-f', '--', 'skills/first-skill/generated.txt')
+        self.commit(self.upstream, 'Tracked file with matching ignore rule')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.assertIn('generated.txt', self.git(self.remote, 'ls-tree', '-r', '--name-only', 'HEAD'))
+        self.sync()
+        self.assertEqual((self.installed() / 'generated.txt').read_text(), 'tracked upstream payload')
+        private = self.installed() / 'runtime.private'
+        private.write_text('keep local')
+        path = self.installed() / 'SKILL.md'
+        path.write_text(path.read_text() + '\nVisible edit')
+        self.sync()
+        self.assertNotIn('runtime.private', self.git(self.remote, 'ls-tree', '-r', '--name-only', 'HEAD'))
+
+    def test_mode_only_local_edit_blocks_upstream_changes(self):
+        script = self.upstream / 'skills/first-skill/run.sh'
+        script.write_text('echo base\n')
+        script.chmod(0o644)
+        self.commit(self.upstream, 'Script')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.sync()
+        (self.installed() / 'run.sh').chmod(0o755)
+        self.sync()
+        self.git(self.seed, 'pull', '--ff-only')
+        self.write_skill('first-skill', 'new upstream')
+        self.commit(self.upstream, 'Upstream update')
+        self.assertIn('upstream-conflict', self.run_cli(self.seed, 'check', '--apply-auto', expected=1))
+        self.assertTrue((self.seed / 'skills/first-skill/run.sh').stat().st_mode & 0o111)
+
+    def test_edit_during_server_fetch_is_preserved(self):
+        spec = importlib.util.spec_from_file_location('review_skills', ROOT / 'server/skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.set_catalog(self.seed)
+        self.write_skill('first-skill', 'upstream two')
+        self.commit(self.upstream, 'Update upstream')
+        path = self.seed / 'skills/first-skill/SKILL.md'
+        original = module.materialize
+        def fetch_and_edit(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if kwargs.get('approved') is False:
+                path.write_text(path.read_text() + '\nEDIT DURING FETCH')
+            return result
+        from types import SimpleNamespace
+        with patch.dict(os.environ, self.env), patch.object(module, 'materialize', side_effect=fetch_and_edit):
+            result = module.check(SimpleNamespace(approve=[], expected_revision=None,
+                apply_auto=True, apply_catalog=True, publish=False))
+        self.assertEqual(result, 1)
+        self.assertIn('EDIT DURING FETCH', path.read_text())
+        self.assertIn('version one', path.read_text())
+        self.assertNotIn('upstream two', path.read_text())
+
+    def test_edit_during_legacy_mode_baseline_fetch_is_preserved(self):
+        registry = json.loads((self.seed / 'sources.json').read_text())
+        registry['skills']['first-skill'].pop('executable_sha256')
+        (self.seed / 'sources.json').write_text(json.dumps(registry))
+        self.commit(self.seed, 'Legacy registry')
+        spec = importlib.util.spec_from_file_location('legacy_skills', ROOT / 'server/skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.set_catalog(self.seed)
+        self.write_skill('first-skill', 'upstream two')
+        self.commit(self.upstream, 'Update upstream')
+        path = self.seed / 'skills/first-skill/SKILL.md'
+        original = module.materialize
+        def fetch_and_edit(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if kwargs.get('approved', True):
+                path.write_text(path.read_text() + '\nEDIT DURING BASELINE FETCH')
+            return result
+        from types import SimpleNamespace
+        with patch.dict(os.environ, self.env), patch.object(module, 'materialize', side_effect=fetch_and_edit):
+            result = module.check(SimpleNamespace(approve=[], expected_revision=None,
+                apply_auto=True, apply_catalog=True, publish=False))
+        self.assertEqual(result, 1)
+        self.assertIn('EDIT DURING BASELINE FETCH', path.read_text())
+        self.assertIn('version one', path.read_text())
+
     def test_client_preserves_unrelated_and_staged_changes(self):
         self.sync()
         private = self.consumer / 'private.txt'
@@ -290,6 +426,11 @@ class RegistryTests(unittest.TestCase):
         self.assertIn('This station', local.read_text())
         self.assertIn('Other station', remote.read_text())
         self.assertNotEqual(self.git(self.consumer, 'rev-parse', 'HEAD'), self.git(self.seed, 'rev-parse', 'HEAD'))
+        self.assertNotIn('<<<<<<<', local.read_text())
+        self.assertFalse((self.consumer / '.git/MERGE_HEAD').exists())
+        self.assertEqual(len(self.git(self.consumer, 'worktree', 'list').splitlines()), 1)
+        self.sync(expected=1)
+        self.assertNotIn('<<<<<<<', local.read_text())
 
     def test_unpublished_manual_commits_are_never_sent_automatically(self):
         (self.consumer / 'private.txt').write_text('private')
@@ -349,6 +490,10 @@ class RegistryTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('AGENT_SKILLS_PWSH') or shutil.which('pwsh'), 'PowerShell unavailable')
     def test_powershell_git_sync_links_and_legacy_migration(self):
         old = self.legacy_link(edited=True)
+        (self.seed / 'skills/first-skill/remote.sh').write_text('echo remote\n')
+        self.commit(self.seed, 'Independent remote edit before PowerShell sync')
+        self.git(self.seed, 'push')
+        (self.consumer / '.git/info/exclude').write_text('*.private\n')
         script = self.root / 'powershell-test.ps1'
         script.write_text('''$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
@@ -378,18 +523,37 @@ Install-Registry
 $skill = Join-Path $HOME '.agents/skills/first-skill'
 $path = Join-Path $skill 'SKILL.md'
 if ((Get-Content -LiteralPath $path -Raw) -notmatch 'Legacy local edit') { throw 'Lost legacy edit.' }
+if (-not (Test-Path -LiteralPath (Join-Path $skill 'remote.sh'))) { throw 'Independent remote edit missing.' }
+if ((Invoke-Git -GitArgs @('ls-tree', '-r', '--name-only', 'HEAD')) -match 'runtime.private') { throw 'Private file was published.' }
+[IO.File]::WriteAllText((Join-Path $skill 'runtime.private'), 'private-runtime')
 [IO.File]::AppendAllText($path, "`nPowerShell edit", (New-Object Text.UTF8Encoding($false)))
 [IO.File]::WriteAllBytes((Join-Path $skill 'helper.ps1'), [Text.Encoding]::UTF8.GetBytes("Write-Output ours`r`n"))
 Sync-Repository
 Install-Registry
 if ((Invoke-Git -GitArgs @('status', '--porcelain'))) { throw 'Git tree not clean.' }
+if ((Invoke-Git -GitArgs @('ls-tree', '-r', '--name-only', 'HEAD')) -match 'runtime.private') { throw 'Private file was published.' }
+if ([IO.File]::ReadAllText((Join-Path $skill 'runtime.private')) -ne 'private-runtime') { throw 'Private file was lost.' }
 if ([IO.File]::ReadAllText((Join-Path $repo 'skills/first-skill/helper.ps1')) -cne "Write-Output ours`r`n") { throw 'CRLF payload changed.' }
 $target = (Get-Item -LiteralPath $skill).Target
 if ($target -ne (Join-Path $repo 'skills/first-skill')) { throw 'Link does not target catalog.' }
+# Genuine conflicts stay out of installed files and leave no merge in progress.
+Invoke-Git -Directory $env:TEST_PEER -GitArgs @('pull', '--ff-only') | Out-Null
+$peerPath = Join-Path $env:TEST_PEER 'skills/first-skill/SKILL.md'
+[IO.File]::AppendAllText($peerPath, "`nOther station conflict")
+Invoke-Git -Directory $env:TEST_PEER -GitArgs @('add', '--', 'skills') | Out-Null
+Invoke-Git -Directory $env:TEST_PEER -GitArgs @('commit', '-m', 'Other station conflict') | Out-Null
+Invoke-Git -Directory $env:TEST_PEER -GitArgs @('push') | Out-Null
+[IO.File]::AppendAllText($path, "`nThis station conflict")
+$conflicted = $false
+try { Sync-Repository } catch { $conflicted = $true }
+if (-not $conflicted) { throw 'Expected a real conflict.' }
+if ([IO.File]::ReadAllText($path) -match '<<<<<<<') { throw 'Conflict markers reached installed skill.' }
+if (Test-Path -LiteralPath (Join-Path $repo '.git/MERGE_HEAD')) { throw 'Merge left in progress.' }
+if (@(Invoke-Git -GitArgs @('worktree', 'list')).Count -ne 1) { throw 'Merge worktree leaked.' }
 Write-Output 'VERIFIED'
 ''')
         result = subprocess.run([os.environ.get('AGENT_SKILLS_PWSH') or shutil.which('pwsh'), '-NoProfile', '-NonInteractive', '-File', str(script)],
-            env=dict(self.env, TEST_REPO=str(self.consumer), TEST_CLIENT=str(ROOT / 'client')), capture_output=True, text=True)
+            env=dict(self.env, TEST_REPO=str(self.consumer), TEST_CLIENT=str(ROOT / 'client'), TEST_PEER=str(self.seed)), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('VERIFIED', result.stdout)
         self.assertIn('Legacy local edit', (old / 'SKILL.md').read_text())

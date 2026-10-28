@@ -88,7 +88,7 @@ function Migrate-LegacyLinks {
             $expected = $property.Value.content_sha256
             if ($property.Value.customization) { $expected = $property.Value.customization.content_sha256 }
             $current = Get-TreeHash -Directory $folder
-            if ($current -ceq $actual) { continue }
+            if ($current -ceq $actual) { Set-SkillLinks -Name $name; continue }
             if ($expected -cne $baseline -or $current -cne $baseline) { throw "CONFLICT: legacy edits differ from catalog; preserved: $old" }
             $temporary = Join-Path (Invoke-Git -GitArgs @('rev-parse', '--absolute-git-dir')) ('legacy-' + [Guid]::NewGuid().ToString('N'))
             try {
@@ -96,6 +96,7 @@ function Migrate-LegacyLinks {
                 if ((Get-TreeHash -Directory $temporary) -cne $actual -or (Get-TreeHash -Directory $old) -cne $actual) { throw 'Legacy skill changed during migration.' }
                 Remove-Item -LiteralPath $folder -Recurse -Force
                 Move-Item -LiteralPath $temporary -Destination $folder
+                Set-SkillLinks -Name $name
             } finally {
                 if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
             }
@@ -106,8 +107,9 @@ function Migrate-LegacyLinks {
 function Publish-LocalChanges {
     $registry = Get-Registry
     if (@(Invoke-Git -GitArgs @('diff', '--cached', '--name-only')).Count) { throw 'Staged changes preserved.' }
-    $status = (Invoke-Git -GitArgs @('status', '--porcelain', '--untracked-files=all', '-z')) -join "`n"
+    $status = (Invoke-Git -GitArgs @('-c', 'status.renames=false', 'status', '--porcelain', '--untracked-files=all', '-z')) -join "`n"
     if (-not $status) { return }
+    $paths = @()
     foreach ($row in $status.Split([char]0)) {
         if (-not $row) { continue }
         $path = $row.Substring(3)
@@ -115,20 +117,43 @@ function Publish-LocalChanges {
         $name = $Matches[1]
         if (-not $registry.skills.PSObject.Properties[$name]) { throw "Unregistered local skill preserved: $name" }
         Assert-CatalogSkill -Name $name
+        $paths += ':(literal)' + $path
     }
-    $paths = @($registry.skills.PSObject.Properties | ForEach-Object { 'skills/' + $_.Name })
-    Invoke-Git -GitArgs (@('add', '-f', '-A', '--') + $paths) | Out-Null
+    Invoke-Git -GitArgs (@('add', '-A', '--') + $paths) | Out-Null
     Invoke-Git -GitArgs @('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
         'commit', '-m', "Share local skill edits`n`nAgent-Skills-Client: 1") | Out-Null
 }
 
-function Push-Pending {
-    $pending = @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD'))
-    foreach ($revision in $pending) {
+function Assert-AutomaticCommits {
+    foreach ($revision in @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD'))) {
         $message = (Invoke-Git -GitArgs @('show', '-s', '--format=%B', $revision)) -join "`n"
         if ($message -notmatch '(?m)^Agent-Skills-Client: 1$') { throw 'Unpublished manual commits preserved.' }
     }
-    if ($pending.Count) { Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null }
+}
+
+function Reconcile-Repository {
+    & git -C $repo merge-base --is-ancestor '@{upstream}' HEAD
+    if ($LASTEXITCODE -eq 0) { return }
+    & git -C $repo merge-base --is-ancestor HEAD '@{upstream}'
+    if ($LASTEXITCODE -eq 0) {
+        Invoke-Git -GitArgs @('merge', '--ff-only', '--no-overwrite-ignore', '@{upstream}') | Out-Null
+        return
+    }
+    $temporary = Join-Path (Invoke-Git -GitArgs @('rev-parse', '--absolute-git-dir')) ('client-merge-' + [Guid]::NewGuid().ToString('N'))
+    Invoke-Git -GitArgs @('worktree', 'add', '--detach', $temporary, 'HEAD') | Out-Null
+    try {
+        $upstream = Invoke-Git -GitArgs @('rev-parse', '@{upstream}')
+        # Use an empty hooks directory on both Windows and Linux.
+        $hooks = Join-Path $temporary '.empty-hooks'
+        [IO.Directory]::CreateDirectory($hooks) | Out-Null
+        try {
+            Invoke-Git -Directory $temporary -GitArgs @('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
+                '-c', "core.hooksPath=$hooks", 'merge', '--no-ff', '--no-edit', '-m',
+                "Reconcile shared skill edits`n`nAgent-Skills-Client: 1", $upstream) | Out-Null
+        } catch { throw 'CONFLICT: local commit preserved; installed files unchanged. Resolve Git history manually.' }
+        $merged = Invoke-Git -Directory $temporary -GitArgs @('rev-parse', 'HEAD')
+        Invoke-Git -GitArgs @('merge', '--ff-only', '--no-overwrite-ignore', $merged) | Out-Null
+    } finally { Invoke-Git -GitArgs @('worktree', 'remove', '--force', $temporary) | Out-Null }
 }
 
 function Sync-Repository {
@@ -136,17 +161,19 @@ function Sync-Repository {
     if ($remotes -notcontains 'origin') { Write-Warning 'No origin; linking local catalog only.'; return }
     Invoke-Git -GitArgs @('symbolic-ref', '-q', 'HEAD') | Out-Null
     Invoke-Git -GitArgs @('rev-parse', '--verify', '@{upstream}') | Out-Null
-    foreach ($revision in @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD'))) {
-        $message = (Invoke-Git -GitArgs @('show', '-s', '--format=%B', $revision)) -join "`n"
-        if ($message -notmatch '(?m)^Agent-Skills-Client: 1$') { throw 'Unpublished manual commits preserved.' }
+    Assert-AutomaticCommits
+    Migrate-LegacyLinks
+    Publish-LocalChanges
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'fetch', 'origin') | Out-Null
+        Assert-AutomaticCommits
+        Reconcile-Repository
+        Migrate-LegacyLinks
+        Publish-LocalChanges
+        if (-not @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD')).Count) { return }
+        try { Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null; return }
+        catch { if ($attempt -eq 1) { throw 'Git publication failed; local commit preserved for retry.' } }
     }
-    Migrate-LegacyLinks
-    Publish-LocalChanges
-    Push-Pending
-    Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'pull', '--ff-only') | Out-Null
-    Migrate-LegacyLinks
-    Publish-LocalChanges
-    Push-Pending
 }
 
 function New-SkillLink {
