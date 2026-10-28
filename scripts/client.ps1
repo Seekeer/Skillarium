@@ -7,6 +7,30 @@ function Get-Registry {
     return $registry
 }
 
+function Assert-WindowsPaths {
+    param([string]$Name)
+    $seen = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $files = (Invoke-Git -GitArgs @('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', "skills/$Name")) -join "`n"
+    foreach ($path in @("skills/$Name") + @($files.Split([char]0))) {
+        if (-not $path -or -not (Test-Path -LiteralPath (Join-Path $repo $path))) { continue }
+        $prefix = ''
+        foreach ($part in $path.Split('/')) {
+            $stem = $part.Split('.')[0].TrimEnd(' ')
+            if ($part -match '[<>:"\\|?*\x00-\x1f]' -or $part.EndsWith(' ') -or $part.EndsWith('.') -or
+                $part.Length -gt 255 -or $part -in @('.git', '.gitattributes') -or
+                $stem -match '^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(COM|LPT)[1-9\u00b9\u00b2\u00b3])$') {
+                throw "Windows-incompatible skill path: $path"
+            }
+            if ($prefix) { $prefix += '/' }
+            $prefix += $part
+            if ($seen.ContainsKey($prefix) -and $seen[$prefix] -cne $prefix) {
+                throw "Windows path collision: $($seen[$prefix]) / $prefix"
+            }
+            $seen[$prefix] = $prefix
+        }
+    }
+}
+
 function Assert-CatalogSkill {
     param([string]$Name)
     if ($Name -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$' -or $Name.Length -gt 64) { throw 'Invalid skill name.' }
@@ -21,6 +45,7 @@ function Assert-CatalogSkill {
             throw 'Unsupported link or Git metadata in a skill; preserved.'
         }
     }
+    Assert-WindowsPaths -Name $Name
 }
 
 # Used only to recognize and preserve old cache installations during migration.

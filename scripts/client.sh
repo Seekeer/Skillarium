@@ -6,6 +6,42 @@ skill_names() {
     jq -r '.skills | keys[]' "$repo/sources.json"
 }
 
+check_windows_paths() {
+    local name=$1 path part stem prefix key char code units index
+    local LC_ALL=C.UTF-8
+    local invalid='[<>:"\\|?*]' controls=$'[\001-\037]'
+    local devices=$'^(CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|(COM|LPT)[1-9\u00b9\u00b2\u00b3])$'
+    local -a parts=()
+    local -A seen=()
+    while IFS= read -r -d '' path; do
+        [[ -e "$repo/$path" || -L "$repo/$path" ]] || continue
+        if [[ "$path" =~ $controls ]]; then echo "Windows-incompatible skill path: $path" >&2; return 1; fi
+        IFS=/ read -r -a parts <<< "$path"
+        prefix=''
+        for part in "${parts[@]}"; do
+            stem=${part%%.*}
+            while [[ "$stem" == *' ' ]]; do stem=${stem% }; done
+            if [[ "$part" =~ $invalid || "$part" == *' ' || "$part" == *. ||
+                  "${stem^^}" =~ $devices || "${part,,}" == .git || "${part,,}" == .gitattributes ]]; then
+                echo "Windows-incompatible skill path: $path" >&2; return 1
+            fi
+            if ((${#part} > 127)); then
+                units=0
+                for ((index=0; index<${#part}; index++)); do
+                    char=${part:index:1}; printf -v code '%d' "'$char"
+                    ((units+=1+(code>65535)))
+                done
+                if ((units>255)); then echo "Windows-incompatible skill path: $path" >&2; return 1; fi
+            fi
+            prefix+="${prefix:+/}$part"; key=${prefix^^}
+            if [[ -n ${seen[$key]+present} && "${seen[$key]}" != "$prefix" ]]; then
+                echo "Windows path collision: ${seen[$key]} / $prefix" >&2; return 1
+            fi
+            seen[$key]=$prefix
+        done
+    done < <(printf '%s\0' "skills/$name"; git -C "$repo" ls-files -z --cached --others --exclude-standard -- "skills/$name")
+}
+
 check_skill() {
     local name=$1 folder="$repo/skills/$1"
     [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ && ${#name} -le 64 ]] || return 1
@@ -16,6 +52,7 @@ check_skill() {
     [[ -z $(find "$folder" -iname .git -o -iname .gitattributes) ]] || {
         echo "Unsupported Git metadata in skill: $name" >&2; return 1;
     }
+    check_windows_paths "$name"
 }
 
 # One-time compatibility with old links into hash-addressed caches.
