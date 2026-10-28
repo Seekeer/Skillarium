@@ -37,6 +37,7 @@ class RegistryTests(unittest.TestCase):
         self.git(self.seed, 'init', '-b', 'main')
         (self.seed / 'scripts').mkdir()
         shutil.copyfile(ROOT / 'client/install.sh', self.seed / 'install.sh')
+        shutil.copyfile(ROOT / 'client/.gitattributes', self.seed / '.gitattributes')
         shutil.copyfile(ROOT / 'client/scripts/client.sh', self.seed / 'scripts/client.sh')
         (self.seed / 'sources.json').write_text('{"version":2,"skills":{}}')
         self.register('first-skill', auto='yes')
@@ -255,6 +256,26 @@ $rejected = $false
 try { Install-SkillEntry -Name 'file-skill' -Entry $entry }
 catch { $rejected = $true }
 if (-not $rejected) { throw 'Mismatched file revision was accepted.' }
+# Exercise sharing with a real Git remote and a symbolic link on Linux.
+$oldHash = [string]$registry.skills.'first-skill'.content_sha256
+$oldPath = Join-Path $cache "versions/first-skill/$oldHash"
+$discovery = Join-Path $HOME '.agents/skills'
+[IO.Directory]::CreateDirectory($discovery) | Out-Null
+New-Item -ItemType SymbolicLink -Path (Join-Path $discovery 'first-skill') -Target $oldPath | Out-Null
+$file = Join-Path $oldPath 'SKILL.md'
+[IO.File]::AppendAllText($file, "`nShared PowerShell edit", (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllBytes((Join-Path $oldPath 'helper.ps1'), [Text.Encoding]::UTF8.GetBytes("Write-Output local`r`n"))
+Publish-LocalChanges
+$registry = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$entry = $registry.skills.'first-skill'
+if ($entry.customization.content_sha256 -cne (Get-TreeHash -Directory $oldPath)) { throw 'Shared hash differs.' }
+function Set-SkillLinks {
+    param([string]$Name, [string]$VersionPath)
+    Assert-Version -Directory $VersionPath -Expected $entry.customization.content_sha256
+}
+Install-SkillEntry -Name 'first-skill' -Entry $entry
+$shared = Join-Path $cache ('versions/first-skill/' + $entry.customization.content_sha256)
+if ((Get-Content -LiteralPath (Join-Path $shared 'SKILL.md') -Raw) -notmatch 'Shared PowerShell edit') { throw 'Shared payload missing.' }
 ''')
         env = dict(self.env, TEST_PROJECT=str(ROOT / 'client'), TEST_REGISTRY=str(self.consumer), TEST_SKILL=str(folder),
                    TEST_FILE=str(single_file), TEST_FILE_HASH=file_digest, TEST_FILE_REVISION=file_revision)
@@ -331,7 +352,7 @@ if (-not $rejected) { throw 'Mismatched file revision was accepted.' }
             self.assertEqual(report['status'], 'local-conflict')
             incoming = Path(report['incoming']['path'])
             self.assertIn('incoming upstream', (incoming / 'SKILL.md').read_text())
-        self.assertEqual(len(list(local.parent.parent.iterdir())), 2)
+        self.assertEqual(len(list(local.parent.parent.iterdir())), 1)
 
     def test_server_preserves_local_file_when_upstream_deletes_it(self):
         reference = self.upstream / 'skills/first-skill/reference.md'
@@ -378,10 +399,138 @@ if (-not $rejected) { throw 'Mismatched file revision was accepted.' }
         self.assertEqual(local.read_text(), 'keep local')
         self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
 
+    def test_local_edits_are_shared_with_another_station_and_upstream_conflicts(self):
+        self.sync()
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nOur shared customization')
+        # Binary and CRLF payloads must survive Git round-trips unchanged.
+        (self.installed() / 'helper.ps1').write_bytes(b'Write-Output "local"\r\n')
+        (self.installed() / 'binary.dat').write_bytes(b'\x00\xff\x01')
+        self.sync()
+        self.git(self.seed, 'pull', '--ff-only')
+        entry = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(entry['customization']['base_sha256'], entry['content_sha256'])
+        self.assertEqual(self.installed().resolve().name, entry['customization']['content_sha256'])
+        # Fresh station, separate HOME and cache, receiving only the catalog.
+        peer = self.root / 'peer'
+        self.git(self.root, 'clone', str(self.remote), str(peer))
+        peer_home = self.root / 'peer-home'
+        peer_home.mkdir()
+        env = dict(self.env, HOME=str(peer_home), XDG_CACHE_HOME=str(peer_home / '.cache'))
+        result = subprocess.run(['bash', str(peer / 'install.sh'), '--sync-only'], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        shared = peer_home / '.agents/skills/first-skill'
+        self.assertIn('Our shared customization', (shared / 'SKILL.md').read_text())
+        self.assertEqual((shared / 'helper.ps1').read_bytes(), b'Write-Output "local"\r\n')
+        self.assertEqual((shared / 'binary.dat').read_bytes(), b'\x00\xff\x01')
+        # With no upstream change, the server sees and accepts the shared state.
+        self.run_cli(self.seed, 'check', '--apply-auto')
+        self.write_skill('first-skill', 'new upstream')
+        self.commit(self.upstream, 'Upstream update')
+        before = (self.seed / 'sources.json').read_bytes()
+        self.assertIn('upstream-conflict', self.run_cli(self.seed, 'check', '--apply-auto', expected=1))
+        report = json.loads((self.seed / '.git/skill-updates.json').read_text())['first-skill']
+        self.assertEqual(report['status'], 'upstream-conflict')
+        self.assertIn('new upstream', (Path(report['incoming']['path']) / 'SKILL.md').read_text())
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+        self.assertIn('Our shared customization', (shared / 'SKILL.md').read_text())
+        shutil.rmtree(self.upstream / 'skills/first-skill')
+        self.commit(self.upstream, 'Delete upstream skill')
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        report = json.loads((self.seed / '.git/skill-updates.json').read_text())['first-skill']
+        self.assertEqual(report['status'], 'upstream-conflict')
+        self.assertIn('upstream_error', report)
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+
+    def test_resolve_shared_conflict_and_return_to_original_upstream(self):
+        self.sync()
+        old = self.installed().resolve()
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nShared edit')
+        self.sync()
+        self.assertFalse(old.exists())
+        self.assertTrue(list((self.home / '.cache/agent-skills/local-history/first-skill').iterdir()))
+        self.git(self.seed, 'pull', '--ff-only')
+        entry = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']
+        def resolve(strategy, revision, shared_hash, expected=0):
+            result = subprocess.run(['python3', str(ROOT / 'server/manage.py'), '--config', str(self.config),
+                'resolve', 'first-skill', '--revision', revision, '--shared-hash', shared_hash,
+                '--strategy', strategy, '--publish'], env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        # Guard both sides of the review against concurrent changes.
+        resolve('keep-shared', entry['revision'], '0' * 64, expected=1)
+        self.assertIn('customization', json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill'])
+        # Explicitly returning to the original pin must work on the editing station.
+        resolve('take-upstream', entry['revision'], entry['customization']['content_sha256'])
+        self.sync()
+        self.assertEqual(self.installed().resolve(), old)
+        self.assertNotIn('Shared edit', (self.installed() / 'SKILL.md').read_text())
+
+    def test_keep_shared_resolution_advances_base_without_losing_edits(self):
+        self.sync()
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nShared edit')
+        self.sync()
+        self.git(self.seed, 'pull', '--ff-only')
+        self.write_skill('first-skill', 'new upstream')
+        self.commit(self.upstream, 'New source')
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        report = json.loads((self.seed / '.git/skill-updates.json').read_text())['first-skill']
+        result = subprocess.run(['python3', str(ROOT / 'server/manage.py'), '--config', str(self.config),
+            'resolve', 'first-skill', '--revision', report['incoming']['revision'],
+            '--shared-hash', report['shared']['content_sha256'], '--strategy', 'keep-shared', '--publish'],
+            env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.run_cli(self.seed, 'check', '--apply-auto')
+        self.sync()
+        self.assertIn('Shared edit', (self.installed() / 'SKILL.md').read_text())
+        entry = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(entry['revision'], report['incoming']['revision'])
+        self.assertEqual(entry['customization']['base_sha256'], entry['content_sha256'])
+
+    def test_failed_client_publication_is_retried(self):
+        self.sync()
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nShared edit')
+        self.git(self.consumer, 'config', 'remote.origin.pushurl', str(self.root / 'offline.git'))
+        self.sync(expected=1)
+        pending = self.git(self.consumer, 'rev-parse', 'HEAD')
+        self.assertIn('Shared edit', (self.installed() / 'SKILL.md').read_text())
+        self.git(self.consumer, 'config', '--unset', 'remote.origin.pushurl')
+        self.sync()
+        self.assertEqual(self.git(self.consumer, 'rev-parse', '@{upstream}'), pending)
+        self.assertEqual(self.git(self.consumer, 'status', '--porcelain'), '')
+
+    def test_concurrent_station_edit_does_not_overwrite_shared_version(self):
+        self.sync()
+        old = self.installed().resolve()
+        local = old / 'SKILL.md'
+        local.write_text(local.read_text() + '\nLocal pending edit')
+        # Simulate a different station publishing another customization first.
+        data = json.loads((self.seed / 'sources.json').read_text())
+        entry = data['skills']['first-skill']
+        incoming = self.root / 'incoming'
+        incoming.mkdir()
+        (incoming / 'SKILL.md').write_text('---\nname: first-skill\ndescription: Test\n---\nOther station')
+        spec = importlib.util.spec_from_file_location('skills', ROOT / 'server/skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        digest = module.tree_hash(incoming)
+        destination = self.seed / 'customizations/first-skill' / digest
+        shutil.copytree(incoming, destination)
+        entry['customization'] = dict(content_sha256=digest, base_sha256=entry['content_sha256'], base_revision=entry['revision'])
+        (self.seed / 'sources.json').write_text(json.dumps(data))
+        self.commit(self.seed, 'Other station customization')
+        self.git(self.seed, 'push')
+        self.assertIn('SHARED CONFLICT', self.sync(expected=1))
+        self.assertEqual(self.installed().resolve(), old)
+        self.assertIn('Local pending edit', local.read_text())
+        self.assertEqual(json.loads((self.consumer / 'sources.json').read_text())['skills']['first-skill']['customization']['content_sha256'], digest)
+
     def test_cache_corruption_is_not_overwritten(self):
         self.sync()
         (self.installed() / 'SKILL.md').write_text('modified')
-        self.sync(expected=1)
+        self.sync(expected=1, mode='--link-only')
         self.assertEqual((self.installed() / 'SKILL.md').read_text(), 'modified')
 
     def test_cold_client_downloads_pinned_commit_after_upstream_moves(self):

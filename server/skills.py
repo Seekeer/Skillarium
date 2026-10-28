@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -72,6 +73,13 @@ def validate_entry(name, entry):
         raise ValueError('Invalid skill name')
     if not isinstance(entry.get('auto_update'), bool):
         raise ValueError('auto_update must be true or false')
+    custom = entry.get('customization')
+    if custom is not None:
+        if not isinstance(custom, dict) or any(not re.fullmatch(r'[0-9a-f]{64}', custom.get(key, ''))
+                                               for key in ('content_sha256', 'base_sha256')):
+            raise ValueError('Invalid customization hashes')
+        if custom.get('base_sha256') != entry.get('content_sha256') or custom.get('base_revision') != entry.get('revision'):
+            raise ValueError('Customization base differs from approved source pin')
     source = entry['source']
     if source.get('kind') not in ('git', 'url'):
         raise ValueError('Supported sources: git and url')
@@ -180,10 +188,11 @@ def materialize(name, entry, approved=True):
     validate_entry(name, entry)
     source = entry['source']
     revision = entry.get('revision') if approved else None
-    expected = entry.get('content_sha256') if approved else None
+    custom = entry.get('customization') if approved else None
+    expected = (custom or entry).get('content_sha256') if approved else None
     if approved and not re.fullmatch(r'[0-9a-f]{64}', expected or ''):
         raise ValueError('Missing approved content_sha256')
-    version_dir = cache_root() / 'versions' / name
+    version_dir = cache_root() / ('versions' if approved else 'upstream-versions') / name
     version_dir.mkdir(parents=True, exist_ok=True)
     if approved:
         cached = version_dir / expected
@@ -195,7 +204,10 @@ def materialize(name, entry, approved=True):
     with tempfile.TemporaryDirectory(dir=version_dir) as temporary:
         folder = Path(temporary) / 'content'
         folder.mkdir()
-        if source['kind'] == 'git':
+        if custom:
+            shared = shared_snapshot(name, entry)
+            shutil.copytree(shared, folder, dirs_exist_ok=True)
+        elif source['kind'] == 'git':
             revision = revision if approved else latest_revision(source)
             extract_git(source, revision, folder)
         else:
@@ -217,10 +229,23 @@ def materialize(name, entry, approved=True):
         return final, revision, content_hash
 
 
+def shared_snapshot(name, entry):
+    validate_entry(name, entry)
+    expected = entry['customization']['content_sha256']
+    folder = ROOT / 'customizations' / name / expected
+    for path in (ROOT / 'customizations', folder.parent, folder):
+        if path.is_symlink():
+            raise ValueError('Shared snapshot path contains a symlink')
+    if not folder.is_dir() or tree_hash(folder) != expected:
+        raise ValueError('Shared snapshot content differs from its hash')
+    validate_skill(folder, name)
+    return folder
+
+
 def local_conflict(name, entry):
     """Inspect only an existing approved cache; a cold cache is not a deletion."""
     validate_entry(name, entry)
-    expected = entry.get('content_sha256', '')
+    expected = entry.get('customization', entry).get('content_sha256', '')
     if not re.fullmatch(r'[0-9a-f]{64}', expected):
         raise ValueError('Missing approved content_sha256')
     folder = cache_root() / 'versions' / name / expected
@@ -254,10 +279,20 @@ def check(args):
     failed = False
     for name, entry in data['skills'].items():
         try:
+            if entry.get('customization'):
+                shared_snapshot(name, entry)
             conflict = local_conflict(name, entry)
             try:
                 incoming, revision, digest = materialize(name, entry, approved=False)
             except Exception as error:
+                if not conflict and entry.get('customization'):
+                    reports[name] = dict(status='upstream-conflict',
+                        base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
+                        shared=dict(path=str(shared_snapshot(name, entry)), **entry['customization']),
+                        upstream_error=str(error))
+                    print(f'{name}: upstream-conflict; upstream unavailable; shared customization preserved')
+                    failed = True
+                    continue
                 if not conflict:
                     raise
                 reports[name] = dict(status='local-conflict', local=conflict,
@@ -274,14 +309,24 @@ def check(args):
                 continue
             if name in args.approve and args.expected_revision and revision != args.expected_revision:
                 raise ValueError('Source moved since review; expected revision differs')
-            status = 'unchanged'
+            status = 'customized' if entry.get('customization') else 'unchanged'
             if digest != entry.get('content_sha256'):
+                if entry.get('customization'):
+                    reports[name] = dict(status='upstream-conflict',
+                        base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
+                        shared=dict(path=str(shared_snapshot(name, entry)), **entry['customization']),
+                        incoming=dict(path=str(incoming), revision=revision, content_sha256=digest))
+                    print(f'{name}: upstream-conflict; shared customization preserved; manual resolution required')
+                    failed = True
+                    continue
                 status = 'available'
                 if name in args.approve or (args.apply_auto and entry['auto_update']):
                     entry.update(revision=revision, content_sha256=digest)
                     changed = True
                     status = 'updated'
             reports[name] = dict(status=status, revision=revision, content_sha256=digest)
+            if entry.get('customization'):
+                reports[name]['shared'] = dict(path=str(shared_snapshot(name, entry)), **entry['customization'])
             print(f'{name}: {status}')
         except Exception as error:
             reports[name] = dict(status='error', error=str(error))
@@ -301,6 +346,29 @@ def check(args):
         # Retry an earlier failed push even when no sources changed this run.
         git('push')
     return 1 if failed else 0
+
+
+def resolve(args):
+    data = load_registry()
+    entry = data['skills'].get(args.name)
+    if not entry or not entry.get('customization'):
+        raise ValueError('Skill has no shared customization')
+    shared_snapshot(args.name, entry)
+    if entry['customization']['content_sha256'] != args.shared_hash:
+        raise ValueError('Shared customization moved since review')
+    if local_conflict(args.name, entry):
+        raise ValueError('Unpublished local changes exist; preserved')
+    _, revision, digest = materialize(args.name, entry, approved=False)
+    if revision != args.revision:
+        raise ValueError('Source moved since review')
+    entry.update(revision=revision, content_sha256=digest)
+    if args.strategy == 'take-upstream':
+        del entry['customization']
+    else:
+        entry['customization'].update(base_revision=revision, base_sha256=digest)
+    save_registry(data)
+    print(f'{args.name}: resolved ({args.strategy})')
+    return 0
 
 
 def register(args):

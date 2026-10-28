@@ -191,7 +191,9 @@ def operate(entry, args):
         if args.publish:
             ensure_publishable()
         before = skills.REGISTRY.read_bytes()
-        if args.command == 'register':
+        if args.command == 'resolve':
+            result = skills.resolve(args)
+        elif args.command == 'register':
             result = skills.register(args)
         elif args.command in ('maintain', 'check', 'approve'):
             result = skills.check(SimpleNamespace(
@@ -219,7 +221,7 @@ def main():
     parser.add_argument('--catalog', help='Catalog name from config; all by default')
     parser.add_argument('--client-dir', type=Path, default=UPDATER / 'client')
     commands = parser.add_subparsers(dest='command', required=True)
-    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register'):
+    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register', 'resolve'):
         sub = commands.add_parser(command)
         sub.add_argument('--publish', action='store_true')
         sub.add_argument('--dry-run', action='store_true')
@@ -228,6 +230,11 @@ def main():
         if command == 'approve':
             sub.add_argument('name')
             sub.add_argument('--revision', required=True)
+        if command == 'resolve':
+            sub.add_argument('name')
+            sub.add_argument('--revision', required=True)
+            sub.add_argument('--shared-hash', required=True)
+            sub.add_argument('--strategy', choices=('keep-shared', 'take-upstream'), required=True)
         if command == 'register':
             sub.add_argument('name')
             source = sub.add_mutually_exclusive_group(required=True)
@@ -240,12 +247,12 @@ def main():
     args.apply_auto = getattr(args, 'apply_auto', False)
     if args.command == 'check' and args.apply_auto:
         parser.error('Use maintain --apply-auto to apply automatic updates')
-    if args.dry_run and (args.publish or args.command in ('register', 'approve')):
+    if args.dry_run and (args.publish or args.command in ('register', 'approve', 'resolve')):
         parser.error('dry-run is for status/deploy-client/maintain/check without publish')
     try:
         entries = read_catalogs(args.config.resolve(), args.catalog)
-        if args.command in ('register', 'approve') and len(entries) != 1:
-            raise ValueError('Select exactly one catalog for register/approve')
+        if args.command in ('register', 'approve', 'resolve') and len(entries) != 1:
+            raise ValueError('Select exactly one catalog for register/approve/resolve')
         result = 0
         for entry in entries:
             try:

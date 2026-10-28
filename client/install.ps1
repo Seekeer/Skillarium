@@ -52,6 +52,12 @@ try {
                 if ($changes.Count -gt 0) { throw 'Repository has local changes; Git update skipped.' }
                 Invoke-Git -GitArgs @('symbolic-ref', '-q', 'HEAD') | Out-Null
                 Invoke-Git -GitArgs @('rev-parse', '--verify', '@{upstream}') | Out-Null
+                $pending = @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD'))
+                foreach ($revision in $pending) {
+                    $message = (Invoke-Git -GitArgs @('show', '-s', '--format=%B', $revision)) -join "`n"
+                    if ($message -notmatch '(?m)^Agent-Skills-Client: 1$') { throw 'Unpublished manual commits preserved.' }
+                }
+                if ($pending.Count) { Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null }
                 Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'pull', '--ff-only')
             }
         } catch {
@@ -61,6 +67,10 @@ try {
     }
 
     . (Join-Path $repo 'scripts\client.ps1')
+    if ($Mode -ne 'Link' -and -not $failed) {
+        try { Publish-LocalChanges }
+        catch { Write-Warning $_.Exception.Message; $failed = $true }
+    }
     Install-Registry
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -eq 'Install') {

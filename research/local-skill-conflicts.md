@@ -1,6 +1,6 @@
 # Preserving local skill changes across upstream updates
 
-Research date: 2026-10-28. Scope: read-only investigation; no implementation. Read `AGENTS.md`, repository/client READMEs, client update code, and server pinning code. Recommendations below are design proposals, distinguished from observed behavior.
+Research date: 2026-10-28. Historical investigation before shared customization publishing was implemented; see the repository README for current behavior. Scope: read-only investigation; no implementation. Read `AGENTS.md`, repository/client READMEs, client update code, and server pinning code. Recommendations below are design proposals, distinguished from observed behavior.
 
 ## Recommendation
 
