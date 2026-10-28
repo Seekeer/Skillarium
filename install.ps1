@@ -49,14 +49,29 @@ try {
     }
     Install-Registry
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
+    if ($Mode -in @('Install', 'Sync')) {
+        $launcher = Join-Path $repo 'scripts\sync-hidden.vbs'
+        $hostPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+        if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
+            throw 'Windows Script Host is required for background synchronization.'
+        }
+        $action = New-ScheduledTaskAction -Execute $hostPath -Argument "//B //NoLogo `"$launcher`"" -WorkingDirectory $repo
+    }
     if ($Mode -eq 'Install') {
-        $scriptPath = Join-Path $repo 'install.ps1'
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptPath`" -Mode Sync" -WorkingDirectory $repo
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1) -RepetitionInterval (New-TimeSpan -Hours 1)
         $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Synchronize personal agent skills hourly while logged in.' -Force | Out-Null
         Write-Output "Installed: $taskName"
+    } elseif ($Mode -eq 'Sync') {
+        # Upgrade existing installations without changing their schedule or identity.
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($task -and ($task.Actions.Count -ne 1 -or
+            $task.Actions[0].Execute -ne $action.Execute -or
+            $task.Actions[0].Arguments -ne $action.Arguments -or
+            $task.Actions[0].WorkingDirectory -ne $action.WorkingDirectory)) {
+            Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
+        }
     }
 } finally {
     [Console]::OutputEncoding = $previousEncoding
