@@ -309,10 +309,74 @@ if (-not $rejected) { throw 'Mismatched file revision was accepted.' }
         (old_target / 'SKILL.md').write_text('local edits')
         self.write_skill('first-skill', 'upstream edits')
         self.commit(self.upstream, 'Update')
-        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        # A different controller cannot see this client's local edits.
+        with patch.dict(self.env, XDG_CACHE_HOME=str(self.root / 'separate-controller-cache')):
+            self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
         self.sync(expected=1)
         self.assertEqual(self.installed().resolve(), old_target)
         self.assertEqual((old_target / 'SKILL.md').read_text(), 'local edits')
+
+    def test_server_preserves_local_changes_and_stages_incoming(self):
+        self.sync()
+        local = self.installed().resolve() / 'SKILL.md'
+        local.write_text('local edits')
+        before = (self.seed / 'sources.json').read_bytes()
+        self.write_skill('first-skill', 'incoming upstream')
+        self.commit(self.upstream, 'Update')
+        for flags in [('--apply-auto',), ('--approve', 'first-skill')]:
+            self.assertIn('local-conflict', self.run_cli(self.seed, 'check', *flags, expected=1))
+            self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+            self.assertEqual(local.read_text(), 'local edits')
+            report = json.loads((self.seed / '.git/skill-updates.json').read_text())['first-skill']
+            self.assertEqual(report['status'], 'local-conflict')
+            incoming = Path(report['incoming']['path'])
+            self.assertIn('incoming upstream', (incoming / 'SKILL.md').read_text())
+        self.assertEqual(len(list(local.parent.parent.iterdir())), 2)
+
+    def test_server_preserves_local_file_when_upstream_deletes_it(self):
+        reference = self.upstream / 'skills/first-skill/reference.md'
+        reference.write_text('original')
+        self.commit(self.upstream, 'Reference')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.sync()
+        local = self.installed().resolve() / 'reference.md'
+        local.write_text('custom reference')
+        reference.unlink()
+        self.commit(self.upstream, 'Delete reference')
+        before = (self.seed / 'sources.json').read_bytes()
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        self.assertEqual(local.read_text(), 'custom reference')
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+
+    def test_server_preserves_local_deletion_and_checks_other_skills(self):
+        self.write_skill('second-skill', 'original')
+        self.commit(self.upstream, 'Second skill')
+        self.register('second-skill', 'yes')
+        self.sync()
+        local = self.installed().resolve() / 'SKILL.md'
+        local.unlink()
+        self.write_skill('first-skill', 'upstream edit')
+        self.write_skill('second-skill', 'updated independently')
+        self.commit(self.upstream, 'Update both')
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        self.assertFalse(local.exists())
+        report = json.loads((self.seed / '.git/skill-updates.json').read_text())
+        self.assertEqual(report['first-skill']['status'], 'local-conflict')
+        self.assertEqual(report['second-skill']['status'], 'updated')
+
+    def test_server_reports_local_conflict_when_upstream_skill_disappears(self):
+        self.sync()
+        local = self.installed().resolve() / 'SKILL.md'
+        local.write_text('keep local')
+        shutil.rmtree(self.upstream / 'skills/first-skill')
+        self.commit(self.upstream, 'Remove skill')
+        before = (self.seed / 'sources.json').read_bytes()
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        report = json.loads((self.seed / '.git/skill-updates.json').read_text())['first-skill']
+        self.assertEqual(report['status'], 'local-conflict')
+        self.assertIn('upstream_error', report)
+        self.assertEqual(local.read_text(), 'keep local')
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
 
     def test_cache_corruption_is_not_overwritten(self):
         self.sync()

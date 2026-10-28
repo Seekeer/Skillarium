@@ -217,6 +217,29 @@ def materialize(name, entry, approved=True):
         return final, revision, content_hash
 
 
+def local_conflict(name, entry):
+    """Inspect only an existing approved cache; a cold cache is not a deletion."""
+    validate_entry(name, entry)
+    expected = entry.get('content_sha256', '')
+    if not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('Missing approved content_sha256')
+    folder = cache_root() / 'versions' / name / expected
+    if not folder.exists() and not folder.is_symlink():
+        return None
+    try:
+        if folder.is_symlink() or not folder.is_dir():
+            raise ValueError('Approved cache is not a regular directory')
+        actual = tree_hash(folder)
+        if actual == expected:
+            return None
+        reason = 'Approved cache has local changes (including added/deleted files)'
+    except (ValueError, OSError) as error:
+        actual = None
+        reason = str(error)
+    return dict(path=str(folder), expected_sha256=expected,
+                actual_sha256=actual, reason=reason)
+
+
 def check(args):
     if args.publish and git('status', '--porcelain').strip():
         raise ValueError('Publish requires a clean repository')
@@ -231,7 +254,24 @@ def check(args):
     failed = False
     for name, entry in data['skills'].items():
         try:
-            _, revision, digest = materialize(name, entry, approved=False)
+            conflict = local_conflict(name, entry)
+            try:
+                incoming, revision, digest = materialize(name, entry, approved=False)
+            except Exception as error:
+                if not conflict:
+                    raise
+                reports[name] = dict(status='local-conflict', local=conflict,
+                                     upstream_error=str(error))
+                print(f'{name}: local-conflict; upstream unavailable; local content preserved')
+                failed = True
+                continue
+            if conflict:
+                reports[name] = dict(status='local-conflict', local=conflict,
+                                     incoming=dict(path=str(incoming), revision=revision,
+                                                   content_sha256=digest))
+                print(f'{name}: local-conflict; approved pin and local content preserved')
+                failed = True
+                continue
             if name in args.approve and args.expected_revision and revision != args.expected_revision:
                 raise ValueError('Source moved since review; expected revision differs')
             status = 'unchanged'
