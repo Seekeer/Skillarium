@@ -66,6 +66,7 @@ function Assert-Version {
 function Set-SkillLinks {
     param([string]$Name, [string]$VersionPath)
     $linkFailed = $false
+    $acknowledged = @()
     foreach ($catalog in @((Join-Path $HOME '.agents\skills'), (Join-Path $HOME '.claude\skills'))) {
         $destination = Join-Path $catalog $Name
         $old = $null
@@ -88,7 +89,10 @@ function Set-SkillLinks {
                     throw "CONFLICT (kept): $destination"
                 }
                 try { Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($old)) }
-                catch { Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($VersionPath)) }
+                catch {
+                    Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($VersionPath))
+                    $acknowledged += $old
+                }
                 if ($existing.LinkType -eq 'Junction') {
                     [IO.Directory]::Delete($destination)
                 } else {
@@ -111,6 +115,14 @@ function Set-SkillLinks {
         }
     }
     if ($linkFailed) { throw "Link installation incomplete: $Name" }
+    foreach ($old in ($acknowledged | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $old)) { continue }
+        try { Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($VersionPath)) }
+        catch { continue }
+        $archived = Join-Path $cache ("local-history\$Name\" + [IO.Path]::GetFileName($old) + '-' + [Guid]::NewGuid().ToString('N'))
+        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($archived)) | Out-Null
+        [IO.Directory]::Move($old, $archived)
+    }
 }
 
 function Install-SkillEntry {
@@ -286,7 +298,7 @@ function Publish-LocalChanges {
         }
         $json = ($registry | ConvertTo-Json -Depth 30) + "`n"
         [IO.File]::WriteAllText((Join-Path $repo 'sources.json'), $json, (New-Object Text.UTF8Encoding($false)))
-        Invoke-Git -GitArgs @('add', '--', 'sources.json', 'customizations') | Out-Null
+        Invoke-Git -GitArgs @('add', '-f', '--', 'sources.json', 'customizations') | Out-Null
         Invoke-Git -GitArgs @('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
             'commit', '-m', "Share local skill customizations`n`nAgent-Skills-Client: 1", '--', 'sources.json', 'customizations') | Out-Null
         Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null

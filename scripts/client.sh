@@ -49,9 +49,11 @@ validate_skill() {
 }
 
 link_version() {
-    local name=$1 target=$2 catalog link old temporary errors=0
+    local name=$1 target=$2 catalog link old temporary errors=0 archived
+    local -a acknowledged=()
     for catalog in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
         link="$catalog/$name"
+        old=''
         if [[ -L "$link" && "$link" -ef "$target" ]]; then
             echo "OK: $link"
             continue
@@ -62,6 +64,9 @@ link_version() {
                 ! { validate_skill "$old" "${old##*/}" || validate_skill "$old" "${target##*/}"; }; then
                 echo "CONFLICT (kept): $link" >&2; errors=1; continue
             fi
+        fi
+        if [[ -n "${old:-}" && "$old" != "$target" ]] && validate_skill "$old" "${target##*/}"; then
+            acknowledged+=("$old")
         fi
         mkdir -p -- "$catalog" || return 1
         temporary="$catalog/.$name-new"
@@ -74,6 +79,17 @@ link_version() {
         fi
         echo "LINKED: $link"
     done
+    if ((errors == 0)); then
+        for old in "${acknowledged[@]}"; do
+            [[ -d "$old" ]] || continue
+            validate_skill "$old" "${target##*/}" || continue
+            # Retain edited bytes outside the hash-addressed version namespace.
+            # Otherwise returning to the original upstream hash would be blocked.
+            archived="$cache/local-history/$name/${old##*/}-$(date +%s)-$RANDOM"
+            mkdir -p -- "${archived%/*}" || return 1
+            mv -T -- "$old" "$archived" || return 1
+        done
+    fi
     return "$errors"
 }
 
@@ -220,7 +236,7 @@ publish_local_changes() (
         fi
     done < <(find "$temporary/customizations" -mindepth 2 -maxdepth 2 -type d -print0)
     cp -- "$temporary/sources.json" "$repo/sources.json" || return 1
-    git -C "$repo" add -- sources.json customizations || return 1
+    git -C "$repo" add -f -- sources.json customizations || return 1
     git -C "$repo" -c user.name=agent-skills -c user.email=agent-skills@localhost commit \
         -m $'Share local skill customizations\n\nAgent-Skills-Client: 1' -- sources.json customizations || return 1
     git -C "$repo" -c credential.interactive=false push || return 1

@@ -1,11 +1,11 @@
 {
   "files": {
     ".gitattributes": "3b5d37fc58cc5df34877f834b8161f8a0dc61a887173f2387a3faaee12998c5c",
-    "README.md": "001e981b00f088b18b0a64ef03fdbe75225ffd75473381c099a5c414782775f4",
+    "README.md": "92ed2f6eb1888231d25fa6c2a33dae6ece124e15643533ac02ccb5d12b006bf9",
     "install.ps1": "320408c06621be4d13c9c4da9ead77377c365958cc4c5d317bcc96e15e0109d0",
     "install.sh": "d0195441699c7700de173aa0c0a7dcf6d675b36de37ec74f56c50e2c9f97ffba",
-    "scripts/client.ps1": "b2711e5700932f79fc43c8270b08c08bcaa1a7bda59729d3504c4882e7ac896b",
-    "scripts/client.sh": "47557d1f2823e7e5035dc6aa509206c6d6c968e4730eb41f02223e18d6000037"
+    "scripts/client.ps1": "bda5328ef067fb42b01955a8a6a3a88ab08ebdeb7551a7e48e00fad323a97e57",
+    "scripts/client.sh": "8a9d263281102c830c18d45a27ec6b0453b4f462f62e31829483c044db8ce23b"
   },
   "generator": "agent-skills-updater/client",
   "version": 1
