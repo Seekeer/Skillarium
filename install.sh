@@ -51,31 +51,9 @@ sync_repository() {
         git -C "$repo" -c credential.interactive=false pull --ff-only
 }
 
-link_skills() {
-    local errors=0 skill destination target
-    shopt -s nullglob
-    for skill in "$repo"/skills/*; do
-        [[ -d "$skill" && -f "$skill/SKILL.md" ]] || continue
-        for target in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
-            destination="$target/${skill##*/}"
-            if [[ -L "$destination" && "$destination" -ef "$skill" ]]; then
-                echo "OK: $destination"
-            elif [[ -e "$destination" || -L "$destination" ]]; then
-                echo "CONFLICT (kept): $destination" >&2; errors=1
-            else
-                mkdir -p -- "$target"
-                if ln -sT -- "$skill" "$destination"; then
-                    echo "LINKED: $destination"
-                else errors=1; fi
-            fi
-        done
-    done
-    return "$errors"
-}
-
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
-link_skills || result=1
+python3 "$repo/scripts/skills.py" install || result=1
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install ]]; then exit 0; fi
 

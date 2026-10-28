@@ -1,138 +1,256 @@
-"""Exercise observable sync behavior against local Git repositories."""
+"""Integration tests: upstream -> controller registry -> client cache/links."""
 import fcntl
+import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
-INSTALLER = Path(__file__).resolve().parents[1] / 'install.sh'
-
-
-class SyncTests(unittest.TestCase):
+class RegistryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='agent skills ')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.home = self.root / 'user home'
         self.home.mkdir()
-        self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_GLOBAL=os.devnull,
-                        GIT_CONFIG_NOSYSTEM='1', GIT_AUTHOR_NAME='Test',
-                        GIT_AUTHOR_EMAIL='test@example.invalid', GIT_COMMITTER_NAME='Test',
-                        GIT_COMMITTER_EMAIL='test@example.invalid')
-        self.remote = self.root / 'remote.git'
+        self.env = dict(os.environ, HOME=str(self.home), XDG_CACHE_HOME=str(self.home / '.cache'),
+                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1',
+                        GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
+                        GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
+        self.upstream = self.root / 'upstream'
+        self.upstream.mkdir()
+        self.git(self.upstream, 'init', '-b', 'main')
+        self.write_skill('first-skill', 'version one')
+        self.commit(self.upstream, 'Initial source')
+        self.remote = self.root / 'registry.git'
         self.git(self.root, 'init', '--bare', '--initial-branch=main', str(self.remote))
-        self.seed = self.root / 'publisher'
+        self.seed = self.root / 'controller'
         self.seed.mkdir()
         self.git(self.seed, 'init', '-b', 'main')
-        shutil.copyfile(INSTALLER, self.seed / 'install.sh')
-        self.skill = self.seed / 'skills' / 'first-skill'
-        self.skill.mkdir(parents=True)
-        (self.skill / 'SKILL.md').write_text('version one')
-        self.publish('Initial')
+        (self.seed / 'scripts').mkdir()
+        shutil.copyfile(ROOT / 'install.sh', self.seed / 'install.sh')
+        shutil.copyfile(ROOT / 'check-updates.sh', self.seed / 'check-updates.sh')
+        shutil.copyfile(ROOT / 'scripts/skills.py', self.seed / 'scripts/skills.py')
+        (self.seed / 'sources.json').write_text('{"version":2,"skills":{}}')
+        self.register('first-skill', auto='yes')
+        self.commit(self.seed, 'Initial registry')
         self.git(self.seed, 'remote', 'add', 'origin', str(self.remote))
         self.git(self.seed, 'push', '-u', 'origin', 'main')
-        self.consumer = self.root / 'consumer with spaces'
+        self.consumer = self.root / 'client with spaces'
         self.git(self.root, 'clone', str(self.remote), str(self.consumer))
 
     def git(self, cwd, *args):
         return subprocess.run(['git', '-C', str(cwd), *args], env=self.env,
                               text=True, capture_output=True, check=True).stdout.strip()
 
-    def publish(self, message):
-        self.git(self.seed, 'add', '.')
-        self.git(self.seed, 'commit', '-m', message)
-        if (self.seed / '.git/refs/remotes/origin/main').exists():
-            self.git(self.seed, 'push')
+    def commit(self, repo, message):
+        self.git(repo, 'add', '.')
+        self.git(repo, 'commit', '-m', message)
 
-    def sync(self, mode='--sync-only', expected=0, env=None):
-        result = subprocess.run(['bash', str(self.consumer / 'install.sh'), mode],
-                                env=env or self.env, text=True, capture_output=True)
+    def write_skill(self, name, content):
+        folder = self.upstream / 'skills' / name
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'SKILL.md').write_text(f'---\nname: {name}\ndescription: Test skill\n---\n{content}')
+        return folder
+
+    def run_cli(self, repo, *args, expected=0):
+        result = subprocess.run(['python3', str(repo / 'scripts/skills.py'), *args],
+                                env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result.stdout + result.stderr
 
-    def test_new_skills_and_existing_content_update_in_both_catalogs(self):
+    def register(self, name, auto):
+        return self.run_cli(self.seed, 'register', name, '--git-url', str(self.upstream),
+                            '--path', 'skills/' + name, '--auto-update', auto)
+
+    def sync(self, expected=0, mode='--sync-only'):
+        result = subprocess.run(['bash', str(self.consumer / 'install.sh'), mode],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        return result.stdout + result.stderr
+
+    def installed(self, catalog='.agents', name='first-skill'):
+        return self.home / catalog / 'skills' / name
+
+    def test_clients_only_follow_approved_versions_and_install_new_entries(self):
         self.sync()
-        (self.skill / 'SKILL.md').write_text('version two')
-        new = self.seed / 'skills/new-skill'
-        new.mkdir()
-        (new / 'SKILL.md').write_text('new')
-        self.publish('Update')
+        self.write_skill('first-skill', 'version two')
+        self.write_skill('new-skill', 'new')
+        self.commit(self.upstream, 'New upstream')
+        self.sync()
+        self.assertIn('version one', (self.installed() / 'SKILL.md').read_text())
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.register('new-skill', 'no')
+        self.commit(self.seed, 'Register another source')
+        self.git(self.seed, 'push')
         self.sync()
         self.sync()
         for catalog in ['.agents', '.claude']:
-            path = self.home / catalog / 'skills'
-            self.assertEqual((path / 'first-skill/SKILL.md').read_text(), 'version two')
-            self.assertEqual((path / 'new-skill/SKILL.md').read_text(), 'new')
-            self.assertEqual((path / 'first-skill').resolve(), self.consumer / 'skills/first-skill')
+            self.assertIn('version two', (self.installed(catalog) / 'SKILL.md').read_text())
+            self.assertTrue((self.installed(catalog, 'new-skill') / 'SKILL.md').is_file())
+            self.assertTrue(self.installed(catalog).is_symlink())
+            self.assertNotIn(str(self.consumer), str(self.installed(catalog).resolve()))
 
-    def test_conflict_preserves_user_files_and_installs_other_catalog(self):
-        existing = self.home / '.agents/skills/first-skill'
+    def test_manual_updates_are_reported_until_approved(self):
+        data = json.loads((self.seed / 'sources.json').read_text())
+        data['skills']['first-skill']['auto_update'] = False
+        (self.seed / 'sources.json').write_text(json.dumps(data))
+        old = data['skills']['first-skill']['revision']
+        self.write_skill('first-skill', 'new version')
+        self.commit(self.upstream, 'Changed')
+        self.assertIn('available', self.run_cli(self.seed, 'check', '--apply-auto'))
+        self.assertEqual(json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']['revision'], old)
+        self.assertIn('updated', self.run_cli(self.seed, 'check', '--approve', 'first-skill'))
+        self.assertNotEqual(json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']['revision'], old)
+
+    def test_controller_wrapper_checks_and_publishes(self):
+        self.write_skill('first-skill', 'daily update')
+        self.commit(self.upstream, 'Daily source update')
+        result = subprocess.run(['bash', str(self.seed / 'check-updates.sh'), '--apply-auto'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.sync()
+        self.assertIn('daily update', (self.installed() / 'SKILL.md').read_text())
+
+    def test_failed_publication_is_retried_without_new_source_changes(self):
+        self.write_skill('first-skill', 'update')
+        self.commit(self.upstream, 'Changed')
+        self.git(self.seed, 'config', 'remote.origin.pushurl', str(self.root / 'offline.git'))
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish', expected=1)
+        committed = self.git(self.seed, 'rev-parse', 'HEAD')
+        self.git(self.seed, 'config', '--unset', 'remote.origin.pushurl')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        self.assertEqual(self.git(self.seed, 'rev-parse', '@{upstream}'), committed)
+
+    def test_content_hash_mismatch_preserves_current_install(self):
+        self.sync()
+        old = self.installed().resolve()
+        data = json.loads((self.consumer / 'sources.json').read_text())
+        data['skills']['first-skill']['content_sha256'] = '0' * 64
+        (self.consumer / 'sources.json').write_text(json.dumps(data))
+        self.run_cli(self.consumer, 'install', expected=1)
+        self.assertEqual(self.installed().resolve(), old)
+
+    def test_unrelated_upstream_commit_does_not_churn_registry(self):
+        before = (self.seed / 'sources.json').read_bytes()
+        (self.upstream / 'unrelated.txt').write_text('irrelevant')
+        self.commit(self.upstream, 'Unrelated change')
+        self.assertIn('unchanged', self.run_cli(self.seed, 'check', '--apply-auto'))
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+
+    def test_manual_review_cannot_approve_a_different_revision(self):
+        old = json.loads((self.seed / 'sources.json').read_text())['skills']['first-skill']['revision']
+        before = (self.seed / 'sources.json').read_bytes()
+        self.write_skill('first-skill', 'new unreviewed version')
+        self.commit(self.upstream, 'Source moved')
+        self.run_cli(self.seed, 'check', '--approve', 'first-skill', '--expected-revision', old, expected=1)
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+
+    def test_bad_source_is_reported_without_losing_working_install(self):
+        self.sync()
+        (self.upstream / 'skills/first-skill/SKILL.md').write_text('invalid')
+        self.commit(self.upstream, 'Broken upstream')
+        before = (self.seed / 'sources.json').read_bytes()
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
+        self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
+        self.assertIn('version one', (self.installed() / 'SKILL.md').read_text())
+
+    def test_conflicting_installation_is_preserved(self):
+        existing = self.installed()
         existing.mkdir(parents=True)
         (existing / 'private').write_text('keep')
-        self.assertIn('CONFLICT', self.sync(expected=1))
+        self.sync(expected=1)
         self.assertEqual((existing / 'private').read_text(), 'keep')
-        self.assertTrue((self.home / '.claude/skills/first-skill').is_symlink())
+        self.assertTrue(self.installed('.claude').is_symlink())
 
-    def test_dangling_link_is_preserved(self):
-        existing = self.home / '.agents/skills/first-skill'
+    def test_dangling_user_link_is_preserved(self):
+        existing = self.installed()
         existing.parent.mkdir(parents=True)
         existing.symlink_to(self.root / 'missing', target_is_directory=True)
         self.sync(expected=1)
         self.assertEqual(existing.readlink(), self.root / 'missing')
 
-    def test_dirty_worktree_is_preserved_and_not_pulled(self):
-        original_head = self.git(self.consumer, 'rev-parse', 'HEAD')
-        local = self.consumer / 'skills/first-skill/SKILL.md'
-        local.write_text('local edits')
-        (self.skill / 'SKILL.md').write_text('upstream edits')
-        self.publish('Upstream')
+    def test_local_cache_edits_are_preserved_during_upgrade(self):
+        self.sync()
+        old_target = self.installed().resolve()
+        (old_target / 'SKILL.md').write_text('local edits')
+        self.write_skill('first-skill', 'upstream edits')
+        self.commit(self.upstream, 'Update')
+        self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
         self.sync(expected=1)
-        self.assertEqual(local.read_text(), 'local edits')
-        self.assertEqual(self.git(self.consumer, 'rev-parse', 'HEAD'), original_head)
+        self.assertEqual(self.installed().resolve(), old_target)
+        self.assertEqual((old_target / 'SKILL.md').read_text(), 'local edits')
 
-    def test_diverged_history_is_preserved(self):
-        (self.consumer / 'local.txt').write_text('local')
-        self.git(self.consumer, 'add', '.')
-        self.git(self.consumer, 'commit', '-m', 'Local')
+    def test_cache_corruption_is_not_overwritten(self):
+        self.sync()
+        (self.installed() / 'SKILL.md').write_text('modified')
+        self.sync(expected=1)
+        self.assertEqual((self.installed() / 'SKILL.md').read_text(), 'modified')
+
+    def test_cold_client_downloads_pinned_commit_after_upstream_moves(self):
+        shutil.rmtree(self.home / '.cache')
+        self.write_skill('first-skill', 'unapproved')
+        self.commit(self.upstream, 'New source')
+        self.sync()
+        self.assertIn('version one', (self.installed() / 'SKILL.md').read_text())
+
+    def test_dirty_worktree_and_divergence_are_preserved(self):
         head = self.git(self.consumer, 'rev-parse', 'HEAD')
-        (self.skill / 'SKILL.md').write_text('upstream')
-        self.publish('Remote')
+        (self.consumer / 'local.txt').write_text('local')
+        self.sync(expected=1)
+        self.assertEqual(self.git(self.consumer, 'rev-parse', 'HEAD'), head)
+        self.commit(self.consumer, 'Local')
+        (self.seed / 'other.txt').write_text('remote')
+        self.commit(self.seed, 'Other')
+        self.git(self.seed, 'push')
+        head = self.git(self.consumer, 'rev-parse', 'HEAD')
         self.sync(expected=1)
         self.assertEqual(self.git(self.consumer, 'rev-parse', 'HEAD'), head)
 
-    def test_offline_sync_still_links_installed_version(self):
+    def test_offline_client_uses_cached_version(self):
+        self.sync()
         self.remote.rename(self.root / 'offline.git')
+        self.upstream.rename(self.root / 'upstream-offline')
         self.sync(expected=1)
-        self.assertEqual((self.home / '.agents/skills/first-skill/SKILL.md').read_text(), 'version one')
+        self.assertTrue((self.installed() / 'SKILL.md').is_file())
 
     def test_lock_prevents_parallel_changes(self):
         with (self.consumer / '.git/agent-skills-sync.lock').open('w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertIn('Another sync', self.sync())
-            self.assertFalse((self.home / '.agents').exists())
+            self.assertFalse(self.installed().exists())
 
-    def test_local_only_install_without_remote(self):
-        self.git(self.consumer, 'remote', 'remove', 'origin')
-        self.assertIn('No origin', self.sync())
-        self.assertTrue((self.home / '.claude/skills/first-skill').is_symlink())
+    def test_source_path_traversal_and_symlinks_are_rejected(self):
+        data = json.loads((self.seed / 'sources.json').read_text())
+        data['skills']['first-skill']['source']['path'] = '../escape'
+        (self.seed / 'sources.json').write_text(json.dumps(data))
+        self.run_cli(self.seed, 'check', expected=1)
+        data['skills']['first-skill']['source']['path'] = 'skills/first-skill'
+        (self.seed / 'sources.json').write_text(json.dumps(data))
+        (self.upstream / 'skills/first-skill/unsafe').symlink_to('/etc/passwd')
+        self.commit(self.upstream, 'Unsafe source')
+        self.run_cli(self.seed, 'check', '--apply-auto', expected=1)
 
-    def test_detached_head_and_missing_upstream_are_errors(self):
-        self.git(self.consumer, 'branch', '--unset-upstream')
-        self.assertIn('No upstream', self.sync(expected=1))
-        self.git(self.consumer, 'checkout', '--detach')
-        self.assertIn('Detached HEAD', self.sync(expected=1))
-
-    def test_deleted_skills_leave_links_for_manual_removal(self):
-        self.sync()
-        shutil.rmtree(self.skill)
-        self.publish('Remove skill')
-        self.sync()
-        path = self.home / '.agents/skills/first-skill'
-        self.assertTrue(path.is_symlink())
-        self.assertFalse(path.exists())
+    def test_single_file_must_match_approved_hash(self):
+        spec = importlib.util.spec_from_file_location('skills', ROOT / 'scripts/skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        entry = {'source': {'kind': 'url', 'url': 'https://example.invalid/SKILL.md'}, 'auto_update': True}
+        original = b'---\nname: file-skill\ndescription: Test\n---\nOriginal'
+        with patch.dict(os.environ, self.env), patch.object(module, 'download', return_value=original):
+            folder, revision, digest = module.materialize('file-skill', entry, approved=False)
+            entry.update(revision=revision, content_sha256=digest)
+            shutil.rmtree(folder)
+            with patch.object(module, 'download', return_value=original + b'changed'):
+                with self.assertRaisesRegex(ValueError, 'SHA256'):
+                    module.materialize('file-skill', entry)
 
 
 if __name__ == '__main__':

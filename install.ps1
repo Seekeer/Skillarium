@@ -62,40 +62,14 @@ try {
         }
     }
 
-    $skills = @(Get-ChildItem -LiteralPath (Join-Path $repo 'skills') -Directory | Where-Object {
-        Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') -PathType Leaf
-    })
-    foreach ($skill in $skills) {
-        foreach ($targetDir in @((Join-Path $HOME '.agents\skills'), (Join-Path $HOME '.claude\skills'))) {
-            $destination = Join-Path $targetDir $skill.Name
-            try {
-                $existing = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
-                $matches = $false
-                if ($null -ne $existing -and $existing.LinkType -in @('Junction', 'SymbolicLink')) {
-                    foreach ($linkTarget in @($existing.Target)) {
-                        if ([string]::IsNullOrWhiteSpace($linkTarget)) { continue }
-                        if (-not [IO.Path]::IsPathRooted($linkTarget)) { $linkTarget = Join-Path $targetDir $linkTarget }
-                        $resolved = [IO.Path]::GetFullPath($linkTarget).TrimEnd('\')
-                        if ([string]::Equals($resolved, $skill.FullName.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-                            $matches = $true
-                        }
-                    }
-                }
-                if ($matches) {
-                    Write-Output "OK: $destination"
-                } elseif ($null -ne $existing) {
-                    throw "CONFLICT (kept): $destination"
-                } else {
-                    [IO.Directory]::CreateDirectory($targetDir) | Out-Null
-                    New-Item -ItemType Junction -Path $destination -Target $skill.FullName | Out-Null
-                    Write-Output "LINKED: $destination"
-                }
-            } catch {
-                Write-Warning $_.Exception.Message
-                $failed = $true
-            }
-        }
+    $python = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($python) {
+        & $python.Source -3 (Join-Path $repo 'scripts\skills.py') install
+    } else {
+        $python = Get-Command python.exe -ErrorAction Stop
+        & $python.Source (Join-Path $repo 'scripts\skills.py') install
     }
+    if ($LASTEXITCODE -ne 0) { $failed = $true }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -eq 'Install') {
         $scriptPath = Join-Path $repo 'install.ps1'
