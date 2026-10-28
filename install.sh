@@ -46,6 +46,15 @@ sync_repository() {
     if ! git -C "$repo" rev-parse --verify '@{upstream}' >/dev/null 2>&1; then
         echo 'No upstream branch configured; set it before syncing.' >&2; return 1
     fi
+    local pending revision message
+    pending=$(git -C "$repo" rev-list '@{upstream}..HEAD') || return 1
+    if [[ -n "$pending" ]]; then
+        while IFS= read -r revision; do
+            message=$(git -C "$repo" show -s --format=%B "$revision") || return 1
+            [[ "$message" == *$'\nAgent-Skills-Client: 1' ]] || { echo 'Unpublished manual commits preserved.' >&2; return 1; }
+        done <<< "$pending"
+        GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never git -C "$repo" -c credential.interactive=false push || return 1
+    fi
     GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never \
         GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}" \
         git -C "$repo" -c credential.interactive=false pull --ff-only
@@ -56,6 +65,9 @@ if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
 source "$repo/scripts/client.sh"
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
+if [[ "$mode" != --link-only && "$result" == 0 ]]; then
+    publish_local_changes || result=1
+fi
 install_registry || result=1
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install ]]; then exit 0; fi

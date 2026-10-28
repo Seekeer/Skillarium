@@ -87,7 +87,8 @@ function Set-SkillLinks {
                 if (-not [string]::Equals([IO.Path]::GetDirectoryName($old), $ownedParent, [StringComparison]::OrdinalIgnoreCase)) {
                     throw "CONFLICT (kept): $destination"
                 }
-                Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($old))
+                try { Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($old)) }
+                catch { Assert-Version -Directory $old -Expected ([IO.Path]::GetFileName($VersionPath)) }
                 if ($existing.LinkType -eq 'Junction') {
                     [IO.Directory]::Delete($destination)
                 } else {
@@ -117,6 +118,8 @@ function Install-SkillEntry {
     if ($Name -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$' -or $Name.Length -gt 64 -or
         $Entry.content_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid registry name or hash.' }
     $expected = [string]$Entry.content_sha256
+    if ($Entry.customization) { $expected = [string]$Entry.customization.content_sha256 }
+    if ($expected -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid shared hash.' }
     $source = $Entry.source
     $url = [string]$source.url
     if ([string]::IsNullOrEmpty($url) -or $url.StartsWith('-') -or $url -match '[\x00-\x1f]') {
@@ -130,7 +133,17 @@ function Install-SkillEntry {
         $content = Join-Path $temporary 'content'
         [IO.Directory]::CreateDirectory($content) | Out-Null
         try {
-            if ($source.kind -eq 'git') {
+            if ($Entry.customization) {
+                $shared = Join-Path $repo "customizations\$Name\$expected"
+                foreach ($path in @((Join-Path $repo 'customizations'), (Join-Path $repo "customizations\$Name"), $shared)) {
+                    $item = Get-Item -LiteralPath $path -Force
+                    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared snapshot path contains a reparse point.' }
+                }
+                Assert-Version -Directory $shared -Expected $expected
+                foreach ($item in Get-ChildItem -LiteralPath $shared -Force) {
+                    Copy-Item -LiteralPath $item.FullName -Destination $content -Recurse
+                }
+            } elseif ($source.kind -eq 'git') {
                 $revision = [string]$Entry.revision
                 if ($revision -cnotmatch '^([0-9a-f]{40}|[0-9a-f]{64})$') { throw 'Invalid pinned commit.' }
                 $relative = [string]$source.path
@@ -198,4 +211,86 @@ function Install-Registry {
         catch { Write-Warning ("ERROR {0}: {1}" -f $property.Name, $_.Exception.Message); $anyFailed = $true }
     }
     if ($anyFailed) { throw 'Some approved skills could not be installed.' }
+}
+
+function Publish-LocalChanges {
+    $changes = @(Invoke-Git -GitArgs @('status', '--porcelain', '--untracked-files=all'))
+    if ($changes.Count) { throw 'Repository has local changes; sharing skipped.' }
+    $gitDir = Invoke-Git -GitArgs @('rev-parse', '--absolute-git-dir')
+    $temporary = Join-Path $gitDir ('shared-' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($temporary) | Out-Null
+    try {
+        $registry = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $snapshots = @()
+        foreach ($property in $registry.skills.PSObject.Properties) {
+            $name = $property.Name
+            $entry = $property.Value
+            $expected = [string]$entry.content_sha256
+            if ($entry.customization) { $expected = [string]$entry.customization.content_sha256 }
+            if ($name -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$' -or $name.Length -gt 64 -or
+                $expected -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid registry name or hash.' }
+            $selected = $null
+            foreach ($catalog in @((Join-Path $HOME '.agents\skills'), (Join-Path $HOME '.claude\skills'))) {
+                $link = Get-Item -LiteralPath (Join-Path $catalog $name) -Force -ErrorAction SilentlyContinue
+                if (-not $link -or $link.LinkType -notin @('Junction', 'SymbolicLink')) { continue }
+                $old = [string]@($link.Target)[0]
+                if (-not [IO.Path]::IsPathRooted($old)) { $old = Join-Path $catalog $old }
+                $old = [IO.Path]::GetFullPath($old).TrimEnd('\')
+                if (-not [string]::Equals([IO.Path]::GetDirectoryName($old), (Join-Path $cache "versions\$name"), [StringComparison]::OrdinalIgnoreCase)) { continue }
+                $oldHash = [IO.Path]::GetFileName($old)
+                if ($oldHash -cnotmatch '^[0-9a-f]{64}$' -or -not (Test-Path -LiteralPath $old)) { continue }
+                $actual = Get-TreeHash -Directory $old
+                if ($actual -ceq $oldHash -or $actual -ceq $expected) { continue }
+                if ($oldHash -cne $expected -or ($selected -and $selected -cne $actual)) {
+                    throw "SHARED CONFLICT (kept): $name; another version was published"
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $old 'SKILL.md') -PathType Leaf)) { throw "Missing SKILL.md (kept): $name" }
+                $selected = $actual
+                $destination = Join-Path $temporary "customizations\$name\$actual"
+                if (-not (Test-Path -LiteralPath $destination)) {
+                    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+                    Copy-Item -LiteralPath $old -Destination $destination -Recurse
+                }
+                if ((Get-TreeHash -Directory $destination) -cne $actual -or (Get-TreeHash -Directory $old) -cne $actual) {
+                    throw 'Skill changed during snapshot; preserved.'
+                }
+                foreach ($file in Get-ChildItem -LiteralPath $destination -Force -Recurse) {
+                    $relative = $file.FullName.Substring($destination.Length + 1).Replace('\', '/')
+                    Assert-SafePath -RelativePath $relative
+                    if ($relative -match '(^|/)(\.git|\.gitattributes)(/|$)') { throw 'Git metadata in shared snapshots is unsupported.' }
+                }
+            }
+            if ($selected) {
+                $entry | Add-Member -NotePropertyName customization -NotePropertyValue ([PSCustomObject]@{
+                    content_sha256 = $selected; base_sha256 = $entry.content_sha256; base_revision = $entry.revision
+                }) -Force
+                $snapshots += "customizations\$name\$selected"
+            }
+        }
+        if (-not $snapshots.Count) { return }
+        $sharedRoot = Join-Path $repo 'customizations'
+        if (Test-Path -LiteralPath $sharedRoot) {
+            $items = @(Get-Item -LiteralPath $sharedRoot -Force) + @(Get-ChildItem -LiteralPath $sharedRoot -Force -Recurse)
+            foreach ($item in $items) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared snapshot path contains a reparse point.' }
+            }
+        }
+        foreach ($relative in $snapshots) {
+            $destination = Join-Path $repo $relative
+            if (Test-Path -LiteralPath $destination) {
+                Assert-Version -Directory $destination -Expected ([IO.Path]::GetFileName($destination))
+            } else {
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $temporary $relative) -Destination $destination -Recurse
+            }
+        }
+        $json = ($registry | ConvertTo-Json -Depth 30) + "`n"
+        [IO.File]::WriteAllText((Join-Path $repo 'sources.json'), $json, (New-Object Text.UTF8Encoding($false)))
+        Invoke-Git -GitArgs @('add', '--', 'sources.json', 'customizations') | Out-Null
+        Invoke-Git -GitArgs @('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
+            'commit', '-m', "Share local skill customizations`n`nAgent-Skills-Client: 1", '--', 'sources.json', 'customizations') | Out-Null
+        Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+    }
 }
