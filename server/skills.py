@@ -114,7 +114,7 @@ def validate_entry(name, entry):
             raise ValueError('Use a full ref, e.g. refs/heads/main')
 
 
-def validate_skill(path, name):
+def validate_skill(path, name=None):
     text = (path / 'SKILL.md').read_text(encoding='utf-8-sig')
     if not text.startswith('---\n') and not text.startswith('---\r\n'):
         raise ValueError('Missing SKILL.md frontmatter')
@@ -122,10 +122,14 @@ def validate_skill(path, name):
     if len(sections) < 3:
         raise ValueError('Unterminated frontmatter')
     match = re.search(r'^name:\s*([^\r\n]+)', sections[1], re.M)
-    if not match or match[1].strip().strip('\"\'') != name:
+    if not match:
+        raise ValueError('Missing SKILL.md name')
+    actual_name = match[1].strip().strip('\"\'')
+    if name is not None and actual_name != name:
         raise ValueError('SKILL.md name must match registry name')
     if not re.search(r'^description:\s*\S', sections[1], re.M):
         raise ValueError('Missing description')
+    return actual_name
 
 
 def content_paths(path, catalog=False):
@@ -298,18 +302,23 @@ def local_skill(name, entry):
     return folder
 
 
-def register_local(args):
-    data = load_registry()
-    if args.name in data['skills']:
-        raise ValueError('Skill already registered; existing installation preserved')
-    entry = dict(source=dict(kind='local', path='skills/' + args.name), auto_update=False)
-    validate_entry(args.name, entry)
-    supplied = Path(args.directory)
+def inspect_local_import(directory, name=None):
+    """Validate an import without copying files, staging, or changing metadata."""
+    supplied = Path(directory)
     if supplied.is_symlink():
         raise ValueError('Local skill must be a regular directory')
     source = supplied.resolve()
-    content_hash = validate_local_content(source, args.name)
-    destination = ROOT / 'skills' / args.name
+    if not source.is_dir() or not (source / 'SKILL.md').is_file():
+        raise ValueError('Укажите папку скилла с файлом SKILL.md')
+    if (source / 'SKILL.md').is_symlink():
+        raise ValueError('Unsupported local skill file or path')
+    name = validate_skill(source, name)
+    entry = dict(source=dict(kind='local', path='skills/' + name), auto_update=False)
+    validate_entry(name, entry)
+    if name in load_registry()['skills']:
+        raise ValueError('Skill already registered; existing installation preserved')
+    content_hash = validate_local_content(source, name)
+    destination = ROOT / 'skills' / name
     if (ROOT / 'skills').is_symlink() or destination.is_symlink():
         raise ValueError('Local skill path contains a symlink')
     if source != destination:
@@ -317,6 +326,16 @@ def register_local(args):
             raise ValueError('Local skill source cannot contain its destination')
         if destination.exists():
             raise ValueError('Existing skill folder preserved; choose another name')
+    return dict(name=name, source=source, destination=destination, content_sha256=content_hash)
+
+
+def register_local(args):
+    plan = inspect_local_import(args.directory, args.name)
+    source, destination = plan['source'], plan['destination']
+    content_hash = plan['content_sha256']
+    data = load_registry()
+    entry = dict(source=dict(kind='local', path='skills/' + args.name), auto_update=False)
+    if source != destination:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.import-') as temporary:
             staged = Path(temporary) / 'content'

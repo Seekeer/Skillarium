@@ -87,6 +87,111 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
         self.assertIn('skills/my-local/scripts/run.sh', f.git(f.seed, 'ls-tree', '-r', '--name-only', 'HEAD'))
 
+    def test_import_local_infers_name_publishes_and_explains_client_installation(self):
+        f = self.fixture
+        source = self.local_folder(f.root / 'Папка с другим именем')
+        (source / '.gitignore').write_text('scratch.tmp\n')
+        (source / 'scratch.tmp').write_text('local scratch file')
+        before = {p.relative_to(source): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+        output = self.manage('import-local', str(source))
+        self.assertIn('Проверка пройдена: my-local', output)
+        self.assertIn(str(f.seed / 'skills/my-local'), output)
+        self.assertIn('Опубликован коммит', output)
+        self.assertIn('scratch.tmp', output)
+        self.assertIn('bash install.sh --sync-only', output)
+        self.assertIn('powershell -File .\\install.ps1 -Mode Sync', output)
+        self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), f.git(f.remote, 'rev-parse', 'main'))
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+        self.assertNotIn('scratch.tmp', f.git(f.remote, 'ls-tree', '-r', '--name-only', 'main'))
+        self.assertEqual(before, {p.relative_to(source): p.read_bytes() for p in source.rglob('*') if p.is_file()})
+        f.sync()
+        self.assertEqual((f.installed(name='my-local') / 'binary.dat').read_bytes(), b'\x00\xff\r\n')
+        self.assertTrue((f.installed(name='my-local') / 'scripts/run.sh').stat().st_mode & 0o111)
+
+    def test_import_local_dry_run_is_read_only_and_works_offline(self):
+        f = self.fixture
+        source = self.local_folder()
+        registry = (f.seed / 'sources.json').read_bytes()
+        head = f.git(f.seed, 'rev-parse', 'HEAD')
+        index = f.git(f.seed, 'write-tree')
+        f.remote.rename(f.root / 'offline.git')
+        output = self.manage('import-local', str(source), '--dry-run')
+        self.assertIn('без изменений', output)
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), registry)
+        self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(f.git(f.seed, 'write-tree'), index)
+        self.assertFalse((f.seed / 'skills/my-local').exists())
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+
+    def test_import_local_validates_before_contacting_remote(self):
+        f = self.fixture
+        source = self.local_folder()
+        f.remote.rename(f.root / 'offline.git')
+        registry = (f.seed / 'sources.json').read_bytes()
+        head = f.git(f.seed, 'rev-parse', 'HEAD')
+        cases = [('No frontmatter', 'Missing SKILL.md frontmatter'),
+                 ('---\nname: ../unsafe\ndescription: Example\n---\n', 'Invalid skill name'),
+                 ('---\nname: my-local\n---\n', 'Missing description')]
+        for text, error in cases:
+            with self.subTest(error=error):
+                (source / 'SKILL.md').write_text(text)
+                output = self.manage('import-local', str(source), expected=1)
+                self.assertIn(error, output)
+                self.assertNotIn('Git command failed', output)
+                self.assertFalse((f.seed / 'skills/my-local').exists())
+                self.assertEqual((f.seed / 'sources.json').read_bytes(), registry)
+                self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), head)
+        (source / 'SKILL.md').unlink()
+        self.assertIn('папку скилла с файлом SKILL.md', self.manage('import-local', str(source), expected=1))
+
+    def test_import_local_adopts_folder_and_preserves_existing_registration(self):
+        f = self.fixture
+        source = self.local_folder(f.seed / 'skills/my-local')
+        self.manage('import-local', str(source))
+        registry = (f.seed / 'sources.json').read_bytes()
+        original = (source / 'SKILL.md').read_bytes()
+        other = self.local_folder(f.root / 'other source')
+        (other / 'SKILL.md').write_text('---\nname: my-local\ndescription: Different\n---\nNew content')
+        self.assertIn('already registered', self.manage('import-local', str(other), expected=1))
+        self.assertEqual((source / 'SKILL.md').read_bytes(), original)
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), registry)
+
+    def test_import_local_requires_catalog_selection_when_ambiguous(self):
+        f = self.fixture
+        source = self.local_folder()
+        config = json.loads(f.config.read_text())
+        config['catalogs'].append(dict(config['catalogs'][0], name='second'))
+        f.config.write_text(json.dumps(config))
+        self.assertIn('--catalog', self.manage('import-local', str(source), expected=1))
+        self.assertFalse((f.seed / 'skills/my-local').exists())
+        self.manage('--catalog', 'test', 'import-local', str(source))
+        self.assertTrue((f.seed / 'skills/my-local/SKILL.md').is_file())
+
+    def test_import_local_failed_push_keeps_import_and_explains_retry(self):
+        f = self.fixture
+        source = self.local_folder()
+        f.git(f.seed, 'config', 'remote.origin.pushurl', str(f.root / 'offline.git'))
+        output = self.manage('import-local', str(source), expected=1)
+        self.assertIn('Публикация не завершена', output)
+        self.assertIn('maintain --publish', output)
+        self.assertNotIn('Опубликован коммит', output)
+        self.assertTrue((f.seed / 'skills/my-local/SKILL.md').is_file())
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+        self.assertNotEqual(f.git(f.seed, 'rev-parse', 'HEAD'), f.git(f.remote, 'rev-parse', 'main'))
+        f.git(f.seed, 'config', '--unset', 'remote.origin.pushurl')
+        self.manage('maintain', '--publish')
+        self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), f.git(f.remote, 'rev-parse', 'main'))
+
+    def test_import_local_can_explicitly_prepare_without_publication(self):
+        f = self.fixture
+        source = self.local_folder()
+        remote_head = f.git(f.remote, 'rev-parse', 'main')
+        output = self.manage('import-local', str(source), '--no-publish')
+        self.assertIn('Публикация отключена', output)
+        self.assertNotIn('Опубликован коммит', output)
+        self.assertEqual(f.git(f.remote, 'rev-parse', 'main'), remote_head)
+        self.assertIn('skills/my-local/SKILL.md', f.git(f.seed, 'diff', '--cached', '--name-only'))
+
     def test_local_registration_preserves_unrelated_changes_and_foreign_folders(self):
         f = self.fixture
         source = self.local_folder()

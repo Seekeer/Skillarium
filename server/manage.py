@@ -18,6 +18,7 @@ CLIENT_FILES = ('install.sh', 'install.ps1', 'scripts/client.sh',
                 'scripts/client.ps1', 'README.md', '.gitattributes')
 MANIFEST = '.agent-skills-client.json'
 TRAILER = 'Agent-Skills-Updater: 1'
+LOCAL_IMPORT_COMMANDS = ('register-local', 'import-local')
 
 
 def canonical(data):
@@ -76,7 +77,7 @@ def ensure_catalog(entry, clean=False):
 
 
 def ensure_registration_clean(args):
-    if args.command != 'register-local':
+    if args.command not in LOCAL_IMPORT_COMMANDS:
         if skills.git('status', '--porcelain', '--untracked-files=all').strip():
             raise ValueError('Catalog has local changes; preserved')
         return
@@ -250,10 +251,46 @@ def publish(paths):
     skills.git('push')
 
 
+def describe_local_import(plan):
+    files = [item for item in plan['source'].rglob('*') if item.is_file()]
+    print('Проверка пройдена: ' + plan['name'])
+    print('Источник: ' + str(plan['source']))
+    print('Папка в каталоге: ' + str(plan['destination']))
+    print(f'Файлов в исходной папке: {len(files)}; байт: {sum(item.stat().st_size for item in files)}')
+
+
+def describe_import_result(entry, args):
+    folder = skills.ROOT / 'skills' / args.name
+    files = skills.content_paths(folder, catalog=True)
+    print(f'Скилл {args.name} импортирован в {folder}')
+    print(f'Файлов для Git: {len(files)}')
+    for item in files:
+        print('  ' + item.relative_to(folder).as_posix())
+    ignored = sorted(item.relative_to(folder).as_posix() for item in folder.rglob('*')
+                     if item.is_file() and item not in files)
+    if ignored:
+        print('Пропущено по правилам Git ignore: ' + ', '.join(ignored))
+    if args.publish:
+        revision = skills.git('rev-parse', '--short', 'HEAD').decode().strip()
+        print(f'Опубликован коммит {revision}, ветка {entry["branch"]}.')
+        print('Другие подключённые станции получат скилл при следующей ежечасной синхронизации.')
+    else:
+        print('Публикация отключена: проверьте и опубликуйте подготовленные изменения Git вручную.')
+        return
+    print('Для подключения выполните из копии общего каталога:')
+    print('  Linux: bash install.sh --sync-only')
+    print('  Windows: powershell -File .\\install.ps1 -Mode Sync')
+
+
 def operate(entry, args):
     skills.set_catalog(entry['path'])
     with catalog_lock():
         ensure_catalog(entry)
+        if args.command in LOCAL_IMPORT_COMMANDS:
+            local_plan = skills.inspect_local_import(args.directory, getattr(args, 'name', None))
+            args.name = local_plan['name']
+            if args.command == 'import-local':
+                describe_local_import(local_plan)
         if args.command != 'status':
             ensure_registration_clean(args)
         if args.command != 'status' and not args.dry_run:
@@ -263,6 +300,10 @@ def operate(entry, args):
         plan = deployment_plan(entry['path'], args.client_dir)
         print(entry['name'] + ': client ' + ('update available' if plan else 'current'))
         if args.command == 'status':
+            return 0
+        if args.command == 'import-local' and args.dry_run:
+            ensure_publishable()
+            print('Проверка завершена без изменений. Для импорта повторите команду без --dry-run.')
             return 0
         if args.publish:
             ensure_publishable()
@@ -278,7 +319,7 @@ def operate(entry, args):
                     paths.update(migration)
         if args.command == 'resolve':
             result = skills.resolve(args)
-        elif args.command == 'register-local':
+        elif args.command in LOCAL_IMPORT_COMMANDS:
             result = skills.register_local(args)
             paths.add('skills/' + args.name)
         elif args.command == 'register':
@@ -302,8 +343,19 @@ def operate(entry, args):
             deploy(entry['path'], plan)
             paths.update(plan)
         if args.publish and not args.dry_run:
-            publish(paths)
+            try:
+                publish(paths)
+            except Exception:
+                if args.command == 'import-local':
+                    print('Публикация не завершена; импорт сохранён в ' + str(local_plan['destination']), file=sys.stderr)
+                    if skills.git('status', '--porcelain').strip():
+                        print('Проверьте подготовленные изменения и завершите commit/push вручную.', file=sys.stderr)
+                    else:
+                        print('Устраните ошибку Git и повторите публикацию: maintain --publish для этого каталога.', file=sys.stderr)
+                raise
             print(entry['name'] + ': published')
+        if args.command == 'import-local':
+            describe_import_result(entry, args)
         return result
 
 
@@ -313,9 +365,9 @@ def main():
     parser.add_argument('--catalog', help='Catalog name from config; all by default')
     parser.add_argument('--client-dir', type=Path, default=UPDATER / 'client')
     commands = parser.add_subparsers(dest='command', required=True)
-    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register', 'resolve', 'register-local'):
+    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register', 'resolve', 'register-local', 'import-local'):
         sub = commands.add_parser(command)
-        sub.add_argument('--publish', action='store_true')
+        sub.add_argument('--publish', action='store_true', default=command == 'import-local')
         sub.add_argument('--dry-run', action='store_true')
         if command in ('maintain', 'check'):
             sub.add_argument('--apply-auto', action='store_true')
@@ -330,6 +382,10 @@ def main():
         if command == 'register-local':
             sub.add_argument('name')
             sub.add_argument('--directory', type=Path, required=True)
+        if command == 'import-local':
+            sub.description = 'Импорт собственной папки скилла; имя из SKILL.md, публикация включена по умолчанию.'
+            sub.add_argument('directory', type=Path, help='Папка с SKILL.md, скриптами и справочными файлами')
+            sub.add_argument('--no-publish', dest='publish', action='store_false', help='Импортировать без отправки в Git')
         if command == 'register':
             sub.add_argument('name')
             source = sub.add_mutually_exclusive_group(required=True)
@@ -339,6 +395,8 @@ def main():
             sub.add_argument('--ref', default='refs/heads/main')
             sub.add_argument('--auto-update', choices=('yes', 'no'), required=True)
     args = parser.parse_args()
+    if args.command == 'import-local' and args.dry_run:
+        args.publish = False
     if args.command == 'resolve' and args.strategy != 'detach' and not args.revision:
         parser.error('--revision is required except for --strategy detach')
     args.apply_auto = getattr(args, 'apply_auto', False)
@@ -348,8 +406,8 @@ def main():
         parser.error('dry-run is for status/deploy-client/maintain/check without publish')
     try:
         entries = read_catalogs(args.config.resolve(), args.catalog)
-        if args.command in ('register', 'approve', 'resolve', 'register-local') and len(entries) != 1:
-            raise ValueError('Select exactly one catalog for registration/approval/resolution')
+        if args.command in ('register', 'approve', 'resolve', *LOCAL_IMPORT_COMMANDS) and len(entries) != 1:
+            raise ValueError('Выберите один каталог через --catalog <name> для регистрации или разрешения конфликта')
         result = 0
         for entry in entries:
             try:
