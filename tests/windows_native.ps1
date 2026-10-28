@@ -45,7 +45,7 @@ try {
     $env:GIT_AUTHOR_NAME = $env:GIT_COMMITTER_NAME = 'agent-skills-test'
     $env:GIT_AUTHOR_EMAIL = $env:GIT_COMMITTER_EMAIL = 'test@example.invalid'
 
-    foreach ($relative in @('install.ps1', 'scripts/client.ps1', '.gitattributes')) {
+    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/sync-hidden.vbs', '.gitattributes')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $projectRoot "client/$relative") -Destination $destination
@@ -82,9 +82,10 @@ try {
     $installedTask = $true
     & $installer -Mode Install
     $task = Get-ScheduledTask -TaskName $scheduledName
-    Test-Assert ($task.Actions[0].Execute -eq 'powershell.exe') 'Wrong scheduled executable.'
-    Test-Assert ($task.Actions[0].Arguments.Contains(('"' + $installer + '"'))) 'Installer path is not quoted.'
-    Test-Assert ($task.Actions[0].Arguments -match '-Mode Sync') 'Task does not synchronize.'
+    $launcher = Join-Path $consumer 'scripts/sync-hidden.vbs'
+    Test-Assert ($task.Actions[0].Execute -ieq (Join-Path $env:SystemRoot 'System32/wscript.exe')) 'Wrong scheduled executable.'
+    Test-Assert ($task.Actions[0].Arguments.Contains(('"' + $launcher + '"'))) 'Launcher path is not quoted.'
+    Test-Assert ($task.Actions[0].Arguments -match '//B //NoLogo') 'Task does not run in background.'
     Test-Assert ($task.Actions[0].WorkingDirectory -eq $consumer) 'Wrong task working directory.'
     Test-Assert ($task.Triggers[0].Repetition.Interval -eq 'PT1H') 'Task is not hourly.'
     Test-Assert ([string]$task.Principal.LogonType -eq 'Interactive') 'Unexpected task logon type.'

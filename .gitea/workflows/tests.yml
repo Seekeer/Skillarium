@@ -30,3 +30,6 @@ jobs:
       - name: Windows PowerShell 5.1 installation and native junctions
         shell: powershell
         run: ./tests/windows_native.ps1
+      - name: Hidden console and actual scheduled execution
+        shell: powershell
+        run: ./tests/verify-windows.ps1

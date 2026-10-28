@@ -419,6 +419,27 @@ class MaintenanceTests(unittest.TestCase):
         self.manage('maintain', '--publish')
         self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), head)
 
+    def test_headless_launcher_is_added_to_old_manifest_and_edits_are_preserved(self):
+        f = self.fixture
+        self.manage('deploy-client', '--publish')
+        relative = 'scripts/sync-hidden.vbs'
+        launcher = f.seed / relative
+        manifest_path = f.seed / '.agent-skills-client.json'
+        manifest = json.loads(manifest_path.read_text())
+        del manifest['files'][relative]
+        manifest_path.write_text(json.dumps(manifest))
+        launcher.unlink()
+        f.commit(f.seed, 'Simulate previous client manifest')
+        f.git(f.seed, 'push')
+        self.manage('deploy-client', '--publish')
+        self.assertEqual(launcher.read_bytes(), (self.templates / relative).read_bytes())
+        self.assertIn(relative, json.loads(manifest_path.read_text())['files'])
+        launcher.write_text("' User launcher customization\n")
+        f.commit(f.seed, 'Customize launcher')
+        f.git(f.seed, 'push')
+        self.assertIn('unrecognized edits', self.manage('deploy-client', '--publish', expected=1))
+        self.assertEqual(launcher.read_text(), "' User launcher customization\n")
+
     def test_committed_client_edits_are_preserved(self):
         f = self.fixture
         self.manage('deploy-client', '--publish')

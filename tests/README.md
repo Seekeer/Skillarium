@@ -21,7 +21,9 @@ Git-синхронизацию и отказы при несовместимых
 
 В `.gitea/workflows/tests.yml` есть отдельная Windows job. Для неё нужен
 Gitea Actions runner на Windows с меткой `windows-latest:host`, Git,
-Python 3.9+ в PATH, Windows PowerShell 5.1 и доступной службой Task Scheduler.
+Python 3.9+ в PATH, Windows PowerShell 5.1, Windows Script Host с VBScript
+и доступной службой Task Scheduler. Для задачи с Interactive logon type
+нужен вошедший в систему пользователь runner.
 Метка `:host` при регистрации означает выполнение на самой Windows,
 а не в Linux-контейнере. Gitea не выдаёт Windows VM по имени метки: если
 такого runner нет, job останется в очереди. Linux job использует имеющуюся
@@ -37,6 +39,7 @@ Python 3.9+ в PATH, Windows PowerShell 5.1 и доступной службой
 ```powershell
 python -m unittest discover -s tests -p test_windows_paths.py -v
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/windows_native.ps1
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/verify-windows.ps1
 ```
 
 `windows_native.ps1` создаёт временные HOME/USERPROFILE, локальный bare remote
@@ -49,9 +52,15 @@ agent-skills для текущей учётной записи тест оста
 
 Запланированную задачу тест не запускает: новый процесс Планировщика получил
 бы настоящий профиль runner, а не временный HOME текущего теста. Проверяются
-её часовой триггер, аргументы с кавычками, рабочая папка, logon type и запрет
+её часовой триггер, скрытый launcher, аргументы с кавычками, рабочая папка, logon type и запрет
 перекрывающихся запусков. Исполнение Sync проверяется прямым запуском
 установщика в изолированном профиле.
+
+Дополнительный `verify-windows.ps1` проверяет скрытую консоль и настоящую
+доставку запуска Планировщиком. Он использует отдельную задачу с уникальным
+именем и пустой реестр, поэтому дочерний процесс не подключает скиллы
+к настоящему профилю runner. Проверяются также миграция старой задачи
+и сохранение её расписания, учётной записи и настроек.
 
 Linux-проверки и синтаксический разбор PowerShell не подтверждают работу
 junction или Task Scheduler. Результат Windows job нужен отдельно.
