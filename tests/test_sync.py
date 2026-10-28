@@ -203,6 +203,14 @@ class RegistryTests(unittest.TestCase):
             path.write_bytes(b'\x00\xff\r\ncontent')
         self.commit(self.upstream, 'Unicode source')
         self.run_cli(self.seed, 'check', '--apply-auto', '--publish')
+        own = self.root / 'own-skill'
+        own.mkdir()
+        (own / 'SKILL.md').write_text('---\nname: my-local\ndescription: Own script\n---\nRun helper.ps1')
+        (own / 'helper.ps1').write_bytes(b'Write-Output own\r\n')
+        result = subprocess.run(['python3', str(ROOT / 'server/manage.py'), '--config', str(self.config),
+            'register-local', 'my-local', '--directory', str(own), '--publish'],
+            env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.git(self.consumer, 'pull', '--ff-only')
         single_file = self.root / 'single.md'
         payload = b'---\nname: file-skill\ndescription: Test\n---\nSingle file'
@@ -234,6 +242,7 @@ function Set-SkillLinks {
     param([string]$Name, [string]$VersionPath)
     $expected = $registry.skills.'first-skill'.content_sha256
     if ($Name -eq 'file-skill') { $expected = $env:TEST_FILE_HASH }
+    if ($Name -eq 'my-local') { $expected = $registry.skills.'my-local'.content_sha256 }
     Assert-Version -Directory $VersionPath -Expected $expected
     Write-Output 'VERIFIED'
 }
@@ -288,6 +297,21 @@ if (Test-Path -LiteralPath (Join-Path $stable 'helper.ps1')) { throw 'Deleted fi
 if ((Get-Content -LiteralPath (Join-Path $stable 'SKILL.md') -Raw) -notmatch 'Second PowerShell edit') { throw 'Stable path not updated.' }
 Invoke-Git -GitArgs @('show', ($firstCommit + ':skills/first-skill/helper.ps1')) | Out-Null
 if (Test-Path -LiteralPath (Join-Path $repo 'customizations')) { throw 'Hash-named copies were created.' }
+$ownEntry = $registry.skills.'my-local'
+$ownPath = Join-Path $cache ('versions/my-local/' + $ownEntry.content_sha256)
+New-Item -ItemType SymbolicLink -Path (Join-Path $discovery 'my-local') -Target $ownPath | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $ownPath 'helper.ps1'), [Text.Encoding]::UTF8.GetBytes("Write-Output edited`r`n"))
+Publish-LocalChanges
+$registry = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$ownEntry = $registry.skills.'my-local'
+if ($ownEntry.customization -or $ownEntry.source.kind -ne 'local') { throw 'Local skill treated as an external customization.' }
+if ($ownEntry.revision -cne $ownEntry.content_sha256) { throw 'Local revision and hash differ.' }
+function Set-SkillLinks {
+    param([string]$Name, [string]$VersionPath)
+    Assert-Version -Directory $VersionPath -Expected $ownEntry.content_sha256
+}
+Install-SkillEntry -Name 'my-local' -Entry $ownEntry
+if ([IO.File]::ReadAllText((Join-Path $repo 'skills/my-local/helper.ps1')) -cne "Write-Output edited`r`n") { throw 'Local edit was not published intact.' }
 ''')
         env = dict(self.env, TEST_PROJECT=str(ROOT / 'client'), TEST_REGISTRY=str(self.consumer), TEST_SKILL=str(folder),
                    TEST_FILE=str(single_file), TEST_FILE_HASH=file_digest, TEST_FILE_REVISION=file_revision)

@@ -27,6 +27,99 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result.stdout + result.stderr
 
+    def local_folder(self, folder=None):
+        f = self.fixture
+        folder = folder or f.root / 'incoming-local'
+        folder.mkdir(parents=True)
+        (folder / 'SKILL.md').write_text('---\nname: my-local\ndescription: Our own script\n---\nRun scripts/run.sh')
+        (folder / 'scripts').mkdir()
+        script = folder / 'scripts/run.sh'
+        script.write_bytes(b'#!/bin/sh\necho local\n')
+        script.chmod(0o755)
+        (folder / 'binary.dat').write_bytes(b'\x00\xff\r\n')
+        return folder
+
+    def test_local_skill_import_publication_and_two_station_updates(self):
+        f = self.fixture
+        source = self.local_folder()
+        self.manage('register-local', 'my-local', '--directory', str(source), '--publish')
+        entry = json.loads((f.seed / 'sources.json').read_text())['skills']['my-local']
+        self.assertEqual(entry['source'], dict(kind='local', path='skills/my-local'))
+        self.assertFalse(entry['auto_update'])
+        self.assertEqual(entry['revision'], entry['content_sha256'])
+        self.assertNotIn('customization', entry)
+        self.assertTrue((f.seed / 'skills/my-local/scripts/run.sh').stat().st_mode & 0o111)
+        shutil.rmtree(source)
+        self.assertIn('my-local: local; no external source', self.manage('maintain', '--apply-auto', '--publish'))
+        f.sync()
+        self.assertEqual((f.installed(name='my-local') / 'binary.dat').read_bytes(), b'\x00\xff\r\n')
+        self.assertTrue(f.installed('.claude', 'my-local').is_symlink())
+        peer = f.root / 'peer'
+        f.git(f.root, 'clone', str(f.remote), str(peer))
+        home = f.root / 'peer-home'
+        home.mkdir()
+        env = dict(f.env, HOME=str(home), XDG_CACHE_HOME=str(home / '.cache'))
+        def sync_peer():
+            result = subprocess.run(['bash', str(peer / 'install.sh'), '--sync-only'], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        sync_peer()
+        installed = f.installed(name='my-local')
+        (installed / 'scripts/run.sh').write_text('echo edited locally\n')
+        (installed / 'binary.dat').unlink()
+        f.sync()
+        sync_peer()
+        self.assertEqual((home / '.agents/skills/my-local/scripts/run.sh').read_text(), 'echo edited locally\n')
+        self.assertFalse((home / '.agents/skills/my-local/binary.dat').exists())
+        f.git(f.seed, 'pull', '--ff-only')
+        updated = json.loads((f.seed / 'sources.json').read_text())['skills']['my-local']
+        self.assertNotEqual(updated['revision'], entry['revision'])
+        self.assertEqual(updated['revision'], updated['content_sha256'])
+        self.assertNotIn('customization', updated)
+        self.manage('maintain', '--apply-auto', '--publish')
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+
+    def test_local_skill_can_adopt_explicit_untracked_catalog_folder(self):
+        f = self.fixture
+        source = self.local_folder(f.seed / 'skills/my-local')
+        self.manage('register-local', 'my-local', '--directory', str(source), '--publish')
+        self.assertEqual(f.git(f.seed, 'status', '--porcelain'), '')
+        self.assertIn('skills/my-local/scripts/run.sh', f.git(f.seed, 'ls-tree', '-r', '--name-only', 'HEAD'))
+
+    def test_local_registration_preserves_unrelated_changes_and_foreign_folders(self):
+        f = self.fixture
+        source = self.local_folder()
+        note = f.seed / 'note.txt'
+        note.write_text('private')
+        before = (f.seed / 'sources.json').read_bytes()
+        self.assertIn('Unrelated catalog changes preserved', self.manage('register-local', 'my-local', '--directory', str(source), '--publish', expected=1))
+        self.assertEqual(note.read_text(), 'private')
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
+        note.unlink()
+        target = f.seed / 'skills/my-local'
+        target.mkdir(parents=True)
+        (target / 'private').write_text('keep')
+        self.assertIn('Existing skill folder preserved', self.manage('register-local', 'my-local', '--directory', str(source), '--publish', expected=1))
+        self.assertEqual((target / 'private').read_text(), 'keep')
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
+
+    def test_local_import_cannot_recursively_copy_its_destination(self):
+        f = self.fixture
+        source = self.local_folder(f.seed / 'skills')
+        f.commit(f.seed, 'Existing parent folder')
+        f.git(f.seed, 'push')
+        self.assertIn('cannot contain its destination', self.manage('register-local', 'my-local', '--directory', str(source), '--publish', expected=1))
+        self.assertFalse((source / 'my-local').exists())
+
+    def test_invalid_local_skill_is_not_registered_or_copied(self):
+        f = self.fixture
+        source = self.local_folder()
+        (source / 'scripts/unsafe').symlink_to(source / 'SKILL.md')
+        before = (f.seed / 'sources.json').read_bytes()
+        self.assertIn('Unsupported local skill', self.manage('register-local', 'my-local', '--directory', str(source), '--publish', expected=1))
+        self.assertFalse((f.seed / 'skills/my-local').exists())
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
+
     def legacy_customizations(self):
         f = self.fixture
         spec = importlib.util.spec_from_file_location('skills', ROOT / 'server/skills.py')

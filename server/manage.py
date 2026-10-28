@@ -75,6 +75,19 @@ def ensure_catalog(entry, clean=False):
     return registry
 
 
+def ensure_registration_clean(args):
+    if args.command != 'register-local':
+        if skills.git('status', '--porcelain', '--untracked-files=all').strip():
+            raise ValueError('Catalog has local changes; preserved')
+        return
+    skills.validate_entry(args.name, dict(source=dict(kind='local', path='skills/' + args.name), auto_update=False))
+    prefix = 'skills/' + args.name + '/'
+    # An explicitly supplied new skill folder is the only permitted dirty path.
+    for item in skills.git('status', '--porcelain', '--untracked-files=all', '-z').decode().split('\0'):
+        if item and (not item.startswith('?? ') or not item[3:].startswith(prefix)):
+            raise ValueError('Unrelated catalog changes preserved; registration stopped')
+
+
 @contextmanager
 def catalog_lock():
     path = Path(skills.git('rev-parse', '--git-path', 'agent-skills-sync.lock').decode().strip())
@@ -234,10 +247,13 @@ def publish(paths):
 def operate(entry, args):
     skills.set_catalog(entry['path'])
     with catalog_lock():
-        ensure_catalog(entry, clean=args.command != 'status')
+        ensure_catalog(entry)
+        if args.command != 'status':
+            ensure_registration_clean(args)
         if args.command != 'status' and not args.dry_run:
             skills.git('pull', '--ff-only')
-            ensure_catalog(entry, clean=True)
+            ensure_catalog(entry)
+            ensure_registration_clean(args)
         plan = deployment_plan(entry['path'], args.client_dir)
         print(entry['name'] + ': client ' + ('update available' if plan else 'current'))
         if args.command == 'status':
@@ -261,6 +277,11 @@ def operate(entry, args):
                     paths.update(item.relative_to(entry['path']).as_posix()
                                  for item in shared.rglob('*') if item.is_file())
             result = skills.resolve(args)
+        elif args.command == 'register-local':
+            result = skills.register_local(args)
+            folder = entry['path'] / 'skills' / args.name
+            paths.update(item.relative_to(entry['path']).as_posix()
+                         for item in folder.rglob('*') if item.is_file())
         elif args.command == 'register':
             result = skills.register(args)
         elif args.command in ('maintain', 'check', 'approve'):
@@ -288,7 +309,7 @@ def main():
     parser.add_argument('--catalog', help='Catalog name from config; all by default')
     parser.add_argument('--client-dir', type=Path, default=UPDATER / 'client')
     commands = parser.add_subparsers(dest='command', required=True)
-    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register', 'resolve'):
+    for command in ('status', 'deploy-client', 'maintain', 'check', 'approve', 'register', 'resolve', 'register-local'):
         sub = commands.add_parser(command)
         sub.add_argument('--publish', action='store_true')
         sub.add_argument('--dry-run', action='store_true')
@@ -302,6 +323,9 @@ def main():
             sub.add_argument('--revision', required=True)
             sub.add_argument('--shared-hash', required=True)
             sub.add_argument('--strategy', choices=('keep-shared', 'take-upstream'), required=True)
+        if command == 'register-local':
+            sub.add_argument('name')
+            sub.add_argument('--directory', type=Path, required=True)
         if command == 'register':
             sub.add_argument('name')
             source = sub.add_mutually_exclusive_group(required=True)
@@ -314,12 +338,12 @@ def main():
     args.apply_auto = getattr(args, 'apply_auto', False)
     if args.command == 'check' and args.apply_auto:
         parser.error('Use maintain --apply-auto to apply automatic updates')
-    if args.dry_run and (args.publish or args.command in ('register', 'approve', 'resolve')):
+    if args.dry_run and (args.publish or args.command in ('register', 'approve', 'resolve', 'register-local')):
         parser.error('dry-run is for status/deploy-client/maintain/check without publish')
     try:
         entries = read_catalogs(args.config.resolve(), args.catalog)
-        if args.command in ('register', 'approve', 'resolve') and len(entries) != 1:
-            raise ValueError('Select exactly one catalog for register/approve/resolve')
+        if args.command in ('register', 'approve', 'resolve', 'register-local') and len(entries) != 1:
+            raise ValueError('Select exactly one catalog for registration/approval/resolution')
         result = 0
         for entry in entries:
             try:

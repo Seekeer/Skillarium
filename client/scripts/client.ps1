@@ -134,8 +134,12 @@ function Install-SkillEntry {
     if ($expected -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid shared hash.' }
     $source = $Entry.source
     $url = [string]$source.url
-    if ([string]::IsNullOrEmpty($url) -or $url.StartsWith('-') -or $url -match '[\x00-\x1f]') {
+    if ($source.kind -ne 'local' -and ([string]::IsNullOrEmpty($url) -or $url.StartsWith('-') -or $url -match '[\x00-\x1f]')) {
         throw 'Invalid source URL.'
+    }
+    if ($source.kind -eq 'local' -and ($source.path -cne "skills/$Name" -or
+        $Entry.revision -cne $expected -or $Entry.customization -or $Entry.auto_update -ne $false)) {
+        throw 'Invalid local skill registration.'
     }
     $versionPath = Join-Path $cache "versions\$Name\$expected"
     if (Test-Path -LiteralPath $versionPath) {
@@ -145,8 +149,11 @@ function Install-SkillEntry {
         $content = Join-Path $temporary 'content'
         [IO.Directory]::CreateDirectory($content) | Out-Null
         try {
-            if ($Entry.customization) {
-                if ($Entry.customization.path) {
+            if ($source.kind -eq 'local' -or $Entry.customization) {
+                if ($source.kind -eq 'local') {
+                    $shared = Join-Path $repo "skills\$Name"
+                    $parents = @((Join-Path $repo 'skills'), $shared)
+                } elseif ($Entry.customization.path) {
                     if ($Entry.customization.path -cne "skills/$Name") { throw 'Invalid shared skill path.' }
                     $shared = Join-Path $repo "skills\$Name"
                     $parents = @((Join-Path $repo 'skills'), $shared)
@@ -280,10 +287,15 @@ function Publish-LocalChanges {
                 }
             }
             if ($selected) {
-                $entry | Add-Member -NotePropertyName customization -NotePropertyValue ([PSCustomObject]@{
-                    path = "skills/$name"; content_sha256 = $selected
-                    base_sha256 = $entry.content_sha256; base_revision = $entry.revision
-                }) -Force
+                if ($entry.source.kind -eq 'local') {
+                    $entry.revision = $selected
+                    $entry.content_sha256 = $selected
+                } else {
+                    $entry | Add-Member -NotePropertyName customization -NotePropertyValue ([PSCustomObject]@{
+                        path = "skills/$name"; content_sha256 = $selected
+                        base_sha256 = $entry.content_sha256; base_revision = $entry.revision
+                    }) -Force
+                }
                 $sharedPaths += "skills/$name"
             }
         }
@@ -302,8 +314,10 @@ function Publish-LocalChanges {
             if ($item) {
                 if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared skill path contains a reparse point.' }
                 $oldEntry = $previous.skills.PSObject.Properties[$name].Value
-                if (-not $oldEntry.customization) { throw "Unrecognized shared skill preserved: $name" }
-                Assert-Version -Directory $destination -Expected $oldEntry.customization.content_sha256
+                $oldHash = $oldEntry.customization.content_sha256
+                if ($oldEntry.source.kind -eq 'local') { $oldHash = $oldEntry.content_sha256 }
+                if (-not $oldHash) { throw "Unrecognized shared skill preserved: $name" }
+                Assert-Version -Directory $destination -Expected $oldHash
             }
         }
         foreach ($relative in $sharedPaths) {
@@ -311,7 +325,9 @@ function Publish-LocalChanges {
             if (Test-Path -LiteralPath $destination) {
                 $name = Split-Path $destination -Leaf
                 $oldEntry = $previous.skills.PSObject.Properties[$name].Value
-                Assert-Version -Directory $destination -Expected $oldEntry.customization.content_sha256
+                $oldHash = $oldEntry.customization.content_sha256
+                if ($oldEntry.source.kind -eq 'local') { $oldHash = $oldEntry.content_sha256 }
+                Assert-Version -Directory $destination -Expected $oldHash
                 Remove-Item -LiteralPath $destination -Recurse -Force
             }
             [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null

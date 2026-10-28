@@ -83,8 +83,14 @@ def validate_entry(name, entry):
         if custom.get('base_sha256') != entry.get('content_sha256') or custom.get('base_revision') != entry.get('revision'):
             raise ValueError('Customization base differs from approved source pin')
     source = entry['source']
+    if source.get('kind') == 'local':
+        if source.get('path') != 'skills/' + name or entry['auto_update'] or custom is not None:
+            raise ValueError('Local skills require their catalog path, auto_update=false and no customization')
+        if entry.get('revision') != entry.get('content_sha256'):
+            raise ValueError('Local skill revision must equal its content hash')
+        return
     if source.get('kind') not in ('git', 'url'):
-        raise ValueError('Supported sources: git and url')
+        raise ValueError('Supported sources: git, url and local')
     url = source['url']
     parsed = urllib.parse.urlsplit(url)
     if parsed.password or parsed.username and parsed.scheme in ('http', 'https'):
@@ -189,6 +195,8 @@ def extract_git(source, revision, destination):
 def materialize(name, entry, approved=True):
     validate_entry(name, entry)
     source = entry['source']
+    if source['kind'] == 'local':
+        return local_skill(name, entry), entry['revision'], entry['content_sha256']
     revision = entry.get('revision') if approved else None
     custom = entry.get('customization') if approved else None
     expected = (custom or entry).get('content_sha256') if approved else None
@@ -229,6 +237,68 @@ def materialize(name, entry, approved=True):
         else:
             folder.rename(final)
         return final, revision, content_hash
+
+
+def validate_local_content(folder, name):
+    """Validate native-client portability before a local folder enters Git."""
+    if folder.is_symlink() or not folder.is_dir():
+        raise ValueError('Local skill must be a regular directory')
+    total = 0
+    for item in folder.rglob('*'):
+        parts = item.relative_to(folder).parts
+        if (item.is_symlink() or not (item.is_file() or item.is_dir())
+                or any(part in ('.git', '.gitattributes') or part.endswith((' ', '.'))
+                       or any(ord(char) < 32 or char in '\\:' for char in part) for part in parts)):
+            raise ValueError('Unsupported local skill file or path')
+        if item.is_file():
+            total += item.stat().st_size
+            if total > MAX_DOWNLOAD:
+                raise ValueError('Skill exceeds 32 MiB limit')
+    validate_skill(folder, name)
+    return tree_hash(folder)
+
+
+def local_skill(name, entry):
+    validate_entry(name, entry)
+    folder = ROOT / entry['source']['path']
+    if (ROOT / 'skills').is_symlink():
+        raise ValueError('Local skill path contains a symlink')
+    if validate_local_content(folder, name) != entry['content_sha256']:
+        raise ValueError('Local skill content differs from its registered hash')
+    return folder
+
+
+def register_local(args):
+    data = load_registry()
+    if args.name in data['skills']:
+        raise ValueError('Skill already registered; existing installation preserved')
+    entry = dict(source=dict(kind='local', path='skills/' + args.name), auto_update=False)
+    validate_entry(args.name, entry)
+    supplied = Path(args.directory)
+    if supplied.is_symlink():
+        raise ValueError('Local skill must be a regular directory')
+    source = supplied.resolve()
+    content_hash = validate_local_content(source, args.name)
+    destination = ROOT / 'skills' / args.name
+    if (ROOT / 'skills').is_symlink() or destination.is_symlink():
+        raise ValueError('Local skill path contains a symlink')
+    if source != destination:
+        if source in destination.parents:
+            raise ValueError('Local skill source cannot contain its destination')
+        if destination.exists():
+            raise ValueError('Existing skill folder preserved; choose another name')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=destination.parent, prefix='.import-') as temporary:
+            staged = Path(temporary) / 'content'
+            shutil.copytree(source, staged)
+            if validate_local_content(staged, args.name) != content_hash:
+                raise ValueError('Local skill changed during import; retry')
+            staged.rename(destination)
+    entry.update(revision=content_hash, content_sha256=content_hash)
+    data['skills'][args.name] = entry
+    save_registry(data)
+    print('Registered local skill:', args.name)
+    return 0
 
 
 def shared_skill(name, entry):
@@ -284,6 +354,13 @@ def check(args):
     failed = False
     for name, entry in data['skills'].items():
         try:
+            if entry['source']['kind'] == 'local':
+                folder = local_skill(name, entry)
+                if name in args.approve:
+                    raise ValueError('Local skills have no external update to approve')
+                reports[name] = dict(status='local', path=str(folder), content_sha256=entry['content_sha256'])
+                print(f'{name}: local; no external source')
+                continue
             if entry.get('customization'):
                 shared_skill(name, entry)
             conflict = local_conflict(name, entry)
