@@ -234,6 +234,7 @@ def ensure_publishable():
 
 def publish(paths):
     ensure_publishable()
+    skills.validate_catalog_windows_paths()
     allowed = set(CLIENT_FILES) | {MANIFEST, 'sources.json'} | set(paths)
     # A concurrent manual edit outside managed files must not join this commit.
     status = skills.git('-c', 'status.renames=false', 'status', '--porcelain', '--untracked-files=all', '-z').decode()

@@ -71,6 +71,7 @@ def atomic_json(path, data):
 def validate_entry(name, entry):
     if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', name) or len(name) > 64:
         raise ValueError('Invalid skill name')
+    validate_windows_paths([name])
     if not isinstance(entry.get('auto_update'), bool):
         raise ValueError('auto_update must be true or false')
     for record in (entry, entry.get('customization') or {}):
@@ -132,6 +133,27 @@ def validate_skill(path, name=None):
     return actual_name
 
 
+def validate_windows_paths(paths):
+    """Reject Win32 device names and case aliases, including parent directories."""
+    seen = {}
+    devices = re.compile(r'(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9\u00b9\u00b2\u00b3])', re.I)
+    for path in paths:
+        parts = str(path).split('/')
+        for index, part in enumerate(parts):
+            if (not part or part in ('.', '..') or part.endswith((' ', '.'))
+                    or re.search(r'[<>:"\\|?*\x00-\x1f]', part)
+                    or len(part.encode('utf-16-le')) // 2 > 255
+                    or devices.fullmatch(part.split('.')[0].rstrip(' '))
+                    or part.lower() in ('.git', '.gitattributes')):
+                raise ValueError('Windows-incompatible skill path: ' + str(path))
+            prefix = '/'.join(parts[:index + 1])
+            # Native case comparison does not expand sharp-s into two letters.
+            key = ''.join(c.upper() if len(c.upper()) == 1 else c for c in prefix)
+            previous = seen.setdefault(key, prefix)
+            if previous != prefix:
+                raise ValueError(f'Windows path collision: {previous} / {prefix}')
+
+
 def content_paths(path, catalog=False):
     if not catalog:
         return sorted(path.rglob('*'))
@@ -139,6 +161,14 @@ def content_paths(path, catalog=False):
     names = git('ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', relative)
     paths = {ROOT / os.fsdecode(name) for name in names.split(b'\0') if name}
     return sorted(item for item in paths if item.exists() or item.is_symlink())
+
+
+def validate_catalog_windows_paths():
+    """Check the proposed Git payload before committing or retrying a push."""
+    for name in load_registry()['skills']:
+        validate_windows_paths([name])
+        paths = git('ls-files', '-z', '--cached', '--', 'skills/' + name)
+        validate_windows_paths(os.fsdecode(path) for path in paths.split(b'\0') if path)
 
 
 def executable_hash(path, catalog=False):
@@ -198,7 +228,9 @@ def extract_git(source, revision, destination):
     archive = git('archive', '--format=tar', tree, cwd=mirror)
     total = 0
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
-        for member in bundle:
+        members = bundle.getmembers()
+        validate_windows_paths(member.name.rstrip('/') for member in members)
+        for member in members:
             path = PurePosixPath(member.name)
             if (path.is_absolute() or '..' in path.parts or '\\' in member.name
                     or ':' in member.name or any(p.endswith((' ', '.')) for p in path.parts)):
@@ -254,7 +286,7 @@ def materialize(name, entry, approved=True):
             if approved and revision != entry.get('revision'):
                 raise ValueError('File no longer matches approved SHA256')
             (folder / 'SKILL.md').write_bytes(payload)
-        validate_skill(folder, name)
+        validate_local_content(folder, name)
         content_hash = tree_hash(folder)
         if approved and content_hash != expected:
             raise ValueError('Downloaded content differs from approved version')
@@ -275,7 +307,9 @@ def validate_local_content(folder, name, catalog=False):
     if folder.is_symlink() or not folder.is_dir():
         raise ValueError('Local skill must be a regular directory')
     total = 0
-    for item in content_paths(folder, catalog):
+    items = content_paths(folder, catalog)
+    validate_windows_paths(item.relative_to(folder).as_posix() for item in items)
+    for item in items:
         parts = item.relative_to(folder).parts
         if (any(parent.is_symlink() for parent in (item, *item.parents) if parent != ROOT and ROOT in parent.parents)
                 or item.is_symlink() or not (item.is_file() or item.is_dir())
@@ -569,6 +603,7 @@ def check(args):
     atomic_json(report_path, reports)
     print(f'Checked {len(reports)} source(s); report: {report_path}')
     if args.publish:
+        validate_catalog_windows_paths()
         if write and (changed or payload_changed):
             git('add', '--', 'sources.json')
             git('commit', '-m', 'Update approved skills and source metadata')
