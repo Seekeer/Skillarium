@@ -30,7 +30,7 @@ class MaintenanceTests(unittest.TestCase):
     def local_folder(self, folder=None):
         f = self.fixture
         folder = folder or f.root / 'incoming-local'
-        folder.mkdir(parents=True)
+        folder.mkdir(parents=True, exist_ok=True)
         (folder / 'SKILL.md').write_text('---\nname: my-local\ndescription: Our own script\n---\nRun scripts/run.sh')
         (folder / 'scripts').mkdir()
         script = folder / 'scripts/run.sh'
@@ -72,6 +72,7 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual((home / '.agents/skills/my-local/scripts/run.sh').read_text(), 'echo edited locally\n')
         self.assertFalse((home / '.agents/skills/my-local/binary.dat').exists())
         f.git(f.seed, 'pull', '--ff-only')
+        self.manage('maintain', '--apply-auto', '--publish')
         updated = json.loads((f.seed / 'sources.json').read_text())['skills']['my-local']
         self.assertNotEqual(updated['revision'], entry['revision'])
         self.assertEqual(updated['revision'], updated['content_sha256'])
@@ -153,7 +154,7 @@ class MaintenanceTests(unittest.TestCase):
         versions = self.legacy_customizations()
         previous = f.git(f.seed, 'rev-parse', 'HEAD')
         self.assertIn('migrate shared skills', self.manage('deploy-client', '--dry-run'))
-        self.assertFalse((f.seed / 'skills').exists())
+        self.assertIn('version one', (f.seed / 'skills/first-skill/SKILL.md').read_text())
         self.assertTrue(versions[-1].exists())
         self.manage('deploy-client', '--publish')
         shared = f.seed / 'skills/first-skill'
@@ -173,7 +174,7 @@ class MaintenanceTests(unittest.TestCase):
         f = self.fixture
         versions = self.legacy_customizations()
         shared = f.seed / 'skills/first-skill'
-        shared.mkdir(parents=True)
+        shared.mkdir(parents=True, exist_ok=True)
         (shared / 'private.txt').write_text('keep')
         f.commit(f.seed, 'Foreign shared folder')
         f.git(f.seed, 'push')
@@ -192,7 +193,55 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn('unrecognized edits; preserved', self.manage('deploy-client', '--publish', expected=1))
         self.assertEqual(local.read_text(), 'unrecognized edits')
         self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
-        self.assertFalse((f.seed / 'skills').exists())
+        self.assertIn('version one', (f.seed / 'skills/first-skill/SKILL.md').read_text())
+
+    def test_metadata_only_catalog_gets_all_pinned_folders_on_server(self):
+        f = self.fixture
+        shutil.rmtree(f.seed / 'skills/first-skill')
+        f.commit(f.seed, 'Old catalog without payload')
+        f.git(f.seed, 'push')
+        f.write_skill('first-skill', 'unapproved upstream version')
+        f.commit(f.upstream, 'Source moved')
+        shutil.rmtree(f.home / '.cache')
+        self.assertIn('populate skills/first-skill', self.manage('deploy-client', '--dry-run'))
+        self.assertFalse((f.seed / 'skills/first-skill').exists())
+        self.manage('deploy-client', '--publish')
+        self.assertIn('version one', (f.seed / 'skills/first-skill/SKILL.md').read_text())
+        self.assertIn('skills/first-skill/SKILL.md', f.git(f.seed, 'ls-tree', '-r', '--name-only', 'HEAD'))
+        f.sync()
+        self.assertEqual(f.installed().resolve(), f.consumer / 'skills/first-skill')
+
+    def test_resolve_upstream_conflict_preserves_or_replaces_stable_folder(self):
+        f = self.fixture
+        self.manage('deploy-client', '--publish')
+        f.sync()
+        path = f.installed() / 'SKILL.md'
+        path.write_text(path.read_text() + '\nOur shared change')
+        (f.installed() / 'local-only.md').write_text('ours')
+        f.sync()
+        f.write_skill('first-skill', 'upstream two')
+        f.commit(f.upstream, 'Source update')
+        self.manage('maintain', '--apply-auto', '--publish', expected=1)
+        report = json.loads((f.seed / '.git/skill-updates.json').read_text())['first-skill']
+        args = ['resolve', 'first-skill', '--revision', report['incoming']['revision'],
+                '--shared-hash', report['shared']['content_sha256']]
+        self.manage(*args, '--strategy', 'keep-shared', '--publish')
+        self.assertIn('Our shared change', (f.seed / 'skills/first-skill/SKILL.md').read_text())
+        self.manage('maintain', '--apply-auto', '--publish')
+        f.write_skill('first-skill', 'upstream three')
+        f.commit(f.upstream, 'Another source update')
+        self.manage('maintain', '--apply-auto', '--publish', expected=1)
+        report = json.loads((f.seed / '.git/skill-updates.json').read_text())['first-skill']
+        self.manage('resolve', 'first-skill', '--revision', report['incoming']['revision'],
+            '--shared-hash', '0' * 64, '--strategy', 'take-upstream', '--publish', expected=1)
+        self.assertTrue((f.seed / 'skills/first-skill/local-only.md').exists())
+        self.manage('resolve', 'first-skill', '--revision', report['incoming']['revision'],
+            '--shared-hash', report['shared']['content_sha256'], '--strategy', 'take-upstream', '--publish')
+        self.assertIn('upstream three', (f.seed / 'skills/first-skill/SKILL.md').read_text())
+        self.assertFalse((f.seed / 'skills/first-skill/local-only.md').exists())
+        f.sync()
+        self.assertIn('upstream three', (f.installed() / 'SKILL.md').read_text())
+        self.assertNotIn('customization', json.loads((f.seed / 'sources.json').read_text())['skills']['first-skill'])
 
     def test_client_deployment_upgrade_and_repeat_preserve_registry(self):
         f = self.fixture

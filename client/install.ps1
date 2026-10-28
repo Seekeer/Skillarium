@@ -38,37 +38,13 @@ foreach ($key in @('GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE', 'GIT_SSH_COMMAND'))
     $previousEnv[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 try {
-    # Prevent both registry and source Git from prompting in scheduled runs.
+    # Prevent catalog Git from prompting in scheduled runs.
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
-    if ($Mode -ne 'Link') {
-        try {
-            $remotes = @(Invoke-Git -GitArgs @('remote'))
-            if ($remotes -notcontains 'origin') {
-                Write-Warning 'No origin configured yet; linking local skills only.'
-            } else {
-                $changes = @(Invoke-Git -GitArgs @('status', '--porcelain', '--untracked-files=normal'))
-                if ($changes.Count -gt 0) { throw 'Repository has local changes; Git update skipped.' }
-                Invoke-Git -GitArgs @('symbolic-ref', '-q', 'HEAD') | Out-Null
-                Invoke-Git -GitArgs @('rev-parse', '--verify', '@{upstream}') | Out-Null
-                $pending = @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD'))
-                foreach ($revision in $pending) {
-                    $message = (Invoke-Git -GitArgs @('show', '-s', '--format=%B', $revision)) -join "`n"
-                    if ($message -notmatch '(?m)^Agent-Skills-Client: 1$') { throw 'Unpublished manual commits preserved.' }
-                }
-                if ($pending.Count) { Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null }
-                Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'pull', '--ff-only')
-            }
-        } catch {
-            Write-Warning $_.Exception.Message
-            $failed = $true
-        }
-    }
-
     . (Join-Path $repo 'scripts\client.ps1')
-    if ($Mode -ne 'Link' -and -not $failed) {
-        try { Publish-LocalChanges }
+    if ($Mode -ne 'Link') {
+        try { Sync-Repository }
         catch { Write-Warning $_.Exception.Message; $failed = $true }
     }
     Install-Registry

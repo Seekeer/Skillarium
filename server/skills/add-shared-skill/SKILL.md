@@ -7,7 +7,7 @@ description: Добавить общий скилл из Git/HTTPS или соб
 
 Работай в agent-skills-updater на i3, прочитай README и server/catalogs.json.
 Выбери каталог по имени; если он один, уточнение не нужно. Управляющий скилл
-остаётся здесь; файлы собственных скиллов хранятся в skills/<name>/ каталога.
+остаётся здесь; файлы всех зарегистрированных скиллов хранятся в skills/<name>/ каталога.
 
 Для собственной папки без внешнего источника выполни `python3
 server/manage.py --catalog <catalog> register-local <name> --directory
@@ -31,7 +31,8 @@ commit, запись source.kind=local и установку через install.
 3. Выполни `python3 server/manage.py --catalog <catalog> register <name>
    --git-url <url> --path <subdir> --ref <full-ref> --auto-update yes|no
    --publish`. Для одиночного файла используй --url. Команда проверяет
-   содержимое, закрепляет revision и content_sha256, разворачивает клиент
+   содержимое, сразу публикует skills/<name>/, закрепляет revision и
+   content_sha256, разворачивает клиент
    и публикует изменения только в выбранном каталоге. Если запись уже есть,
    используй процедуру просмотра/одобрения версий вместо повторной регистрации.
 4. Проверь опубликованный commit, запись sources.json и совместимость скилла

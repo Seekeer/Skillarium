@@ -162,14 +162,17 @@ def shared_migration_plan(root):
         if custom and not custom.get('path'):
             source = skills.shared_skill(name, entry)
             target = safe_destination(root, 'skills/' + name)
-            if target.exists() and (not target.is_dir() or skills.tree_hash(target) != custom['content_sha256']):
+            if target.exists() and (not target.is_dir() or skills.tree_hash(target) not in (custom['content_sha256'], entry['content_sha256'])):
                 raise ValueError('Existing shared skill differs; preserved: ' + name)
             for item in source.rglob('*'):
                 if item.is_file():
                     relative = 'skills/' + name + '/' + item.relative_to(source).as_posix()
                     safe_destination(root, relative)
-                    if not target.exists():
-                        changes[relative] = (item.read_bytes(), item.stat().st_mode & 0o777)
+                    changes[relative] = (item.read_bytes(), item.stat().st_mode & 0o777)
+            if target.exists():
+                for item in target.rglob('*'):
+                    if item.is_file() and not (source / item.relative_to(target)).exists():
+                        changes[item.relative_to(root).as_posix()] = None
             custom['path'] = 'skills/' + name
             registry_changed = True
         legacy = safe_destination(root, 'customizations/' + name)
@@ -234,7 +237,8 @@ def publish(paths):
     # A concurrent manual edit outside managed files must not join this commit.
     status = skills.git('status', '--porcelain', '--untracked-files=all', '-z').decode()
     changed = {item[3:] for item in status.split('\0') if item}
-    if changed - allowed:
+    folders = {'skills/' + name for name in skills.load_registry()['skills']}
+    if any(path not in allowed and not any(path.startswith(folder + '/') for folder in folders) for path in changed):
         raise ValueError('Unrelated catalog changes detected before publication')
     if paths:
         skills.git('add', '-f', '-A', '--', *sorted(paths))
@@ -270,12 +274,6 @@ def operate(entry, args):
                     deploy(entry['path'], migration)
                     paths.update(migration)
         if args.command == 'resolve':
-            if args.strategy == 'take-upstream':
-                record = skills.load_registry()['skills'].get(args.name, {})
-                if record.get('customization', {}).get('path'):
-                    shared = skills.shared_skill(args.name, record)
-                    paths.update(item.relative_to(entry['path']).as_posix()
-                                 for item in shared.rglob('*') if item.is_file())
             result = skills.resolve(args)
         elif args.command == 'register-local':
             result = skills.register_local(args)
@@ -288,10 +286,15 @@ def operate(entry, args):
             result = skills.check(SimpleNamespace(
                 publish=False,
                 apply_auto=args.apply_auto and not args.dry_run,
+                apply_catalog=args.command != 'check' and not args.dry_run,
                 approve=[args.name] if args.command == 'approve' else [],
                 expected_revision=args.revision if args.command == 'approve' else None))
         else:
+            skills.populate_catalog(write=not args.dry_run)
             result = 0
+        if not args.dry_run:
+            paths.update('skills/' + name for name in skills.load_registry()['skills']
+                         if (entry['path'] / 'skills' / name).exists())
         if skills.REGISTRY.read_bytes() != before:
             paths.add('sources.json')
         if args.command != 'check' and not args.dry_run:
