@@ -138,9 +138,61 @@ def deployment_plan(root, client_dir):
     return changes
 
 
+def shared_migration_plan(root):
+    """Move only verified legacy versions; Git retains their history."""
+    data = skills.load_registry()
+    changes = {}
+    registry_changed = False
+    for name, entry in data['skills'].items():
+        skills.validate_entry(name, entry)
+        custom = entry.get('customization')
+        if custom and not custom.get('path'):
+            source = skills.shared_skill(name, entry)
+            target = safe_destination(root, 'skills/' + name)
+            if target.exists() and (not target.is_dir() or skills.tree_hash(target) != custom['content_sha256']):
+                raise ValueError('Existing shared skill differs; preserved: ' + name)
+            for item in source.rglob('*'):
+                if item.is_file():
+                    relative = 'skills/' + name + '/' + item.relative_to(source).as_posix()
+                    safe_destination(root, relative)
+                    if not target.exists():
+                        changes[relative] = (item.read_bytes(), item.stat().st_mode & 0o777)
+            custom['path'] = 'skills/' + name
+            registry_changed = True
+        legacy = safe_destination(root, 'customizations/' + name)
+        if not legacy.exists():
+            continue
+        if not legacy.is_dir():
+            raise ValueError('Unrecognized legacy skill data; preserved: ' + name)
+        for version in legacy.iterdir():
+            if (version.is_symlink() or not version.is_dir()
+                    or not re.fullmatch(r'[0-9a-f]{64}', version.name)
+                    or skills.tree_hash(version) != version.name):
+                raise ValueError('Legacy skill has unrecognized edits; preserved: ' + name)
+            for item in version.rglob('*'):
+                if item.is_file():
+                    changes[item.relative_to(root).as_posix()] = None
+    if registry_changed:
+        changes['sources.json'] = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode()
+    return changes
+
+
 def deploy(root, changes):
     for relative, content in changes.items():
         destination = safe_destination(root, relative)
+        if content is None:
+            destination.unlink()
+            parent = destination.parent
+            while parent != root:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+            continue
+        mode = None
+        if isinstance(content, tuple):
+            content, mode = content
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Atomic replacement avoids partially written installers.
         temporary = destination.with_name('.' + destination.name + '.updater-new')
@@ -148,6 +200,8 @@ def deploy(root, changes):
             raise ValueError('Existing deployment temporary file preserved')
         try:
             temporary.write_bytes(content)
+            if mode is not None:
+                temporary.chmod(mode)
             os.replace(temporary, destination)
         finally:
             if temporary.exists():
@@ -163,14 +217,14 @@ def ensure_publishable():
 
 def publish(paths):
     ensure_publishable()
-    allowed = set(CLIENT_FILES) | {MANIFEST, 'sources.json'}
+    allowed = set(CLIENT_FILES) | {MANIFEST, 'sources.json'} | set(paths)
     # A concurrent manual edit outside managed files must not join this commit.
     status = skills.git('status', '--porcelain', '--untracked-files=all', '-z').decode()
     changed = {item[3:] for item in status.split('\0') if item}
     if changed - allowed:
         raise ValueError('Unrelated catalog changes detected before publication')
     if paths:
-        skills.git('add', '--', *sorted(paths))
+        skills.git('add', '-f', '-A', '--', *sorted(paths))
         if skills.git('diff', '--cached', '--name-only').strip():
             skills.git('commit', '-m', 'Maintain skill catalog and client installers\n\n' + TRAILER)
     # Also retries a previous automation commit whose push failed.
@@ -191,7 +245,21 @@ def operate(entry, args):
         if args.publish:
             ensure_publishable()
         before = skills.REGISTRY.read_bytes()
+        paths = set()
+        if args.command in ('maintain', 'deploy-client'):
+            migration = shared_migration_plan(entry['path'])
+            if migration:
+                print(entry['name'] + ': migrate shared skills to stable paths')
+                if not args.dry_run:
+                    deploy(entry['path'], migration)
+                    paths.update(migration)
         if args.command == 'resolve':
+            if args.strategy == 'take-upstream':
+                record = skills.load_registry()['skills'].get(args.name, {})
+                if record.get('customization', {}).get('path'):
+                    shared = skills.shared_skill(args.name, record)
+                    paths.update(item.relative_to(entry['path']).as_posix()
+                                 for item in shared.rglob('*') if item.is_file())
             result = skills.resolve(args)
         elif args.command == 'register':
             result = skills.register(args)
@@ -203,7 +271,6 @@ def operate(entry, args):
                 expected_revision=args.revision if args.command == 'approve' else None))
         else:
             result = 0
-        paths = set()
         if skills.REGISTRY.read_bytes() != before:
             paths.add('sources.json')
         if args.command != 'check' and not args.dry_run:

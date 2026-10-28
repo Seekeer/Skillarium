@@ -276,6 +276,18 @@ function Set-SkillLinks {
 Install-SkillEntry -Name 'first-skill' -Entry $entry
 $shared = Join-Path $cache ('versions/first-skill/' + $entry.customization.content_sha256)
 if ((Get-Content -LiteralPath (Join-Path $shared 'SKILL.md') -Raw) -notmatch 'Shared PowerShell edit') { throw 'Shared payload missing.' }
+if ($entry.customization.path -cne 'skills/first-skill') { throw 'Expected stable shared path.' }
+$firstCommit = Invoke-Git -GitArgs @('rev-parse', 'HEAD')
+Remove-Item -LiteralPath (Join-Path $discovery 'first-skill') -Force
+New-Item -ItemType SymbolicLink -Path (Join-Path $discovery 'first-skill') -Target $shared | Out-Null
+[IO.File]::AppendAllText((Join-Path $shared 'SKILL.md'), "`nSecond PowerShell edit", (New-Object Text.UTF8Encoding($false)))
+Remove-Item -LiteralPath (Join-Path $shared 'helper.ps1')
+Publish-LocalChanges
+$stable = Join-Path $repo 'skills/first-skill'
+if (Test-Path -LiteralPath (Join-Path $stable 'helper.ps1')) { throw 'Deleted file survived.' }
+if ((Get-Content -LiteralPath (Join-Path $stable 'SKILL.md') -Raw) -notmatch 'Second PowerShell edit') { throw 'Stable path not updated.' }
+Invoke-Git -GitArgs @('show', ($firstCommit + ':skills/first-skill/helper.ps1')) | Out-Null
+if (Test-Path -LiteralPath (Join-Path $repo 'customizations')) { throw 'Hash-named copies were created.' }
 ''')
         env = dict(self.env, TEST_PROJECT=str(ROOT / 'client'), TEST_REGISTRY=str(self.consumer), TEST_SKILL=str(folder),
                    TEST_FILE=str(single_file), TEST_FILE_HASH=file_digest, TEST_FILE_REVISION=file_revision)
@@ -442,6 +454,31 @@ if ((Get-Content -LiteralPath (Join-Path $shared 'SKILL.md') -Raw) -notmatch 'Sh
         self.assertIn('upstream_error', report)
         self.assertEqual((self.seed / 'sources.json').read_bytes(), before)
 
+    def test_repeated_edits_use_one_stable_git_path_and_record_deletions(self):
+        self.sync()
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nFirst shared edit')
+        (self.installed() / 'helper.sh').write_text('echo first\n')
+        self.sync()
+        first = self.git(self.consumer, 'rev-parse', 'HEAD')
+        shared = self.consumer / 'skills/first-skill'
+        self.assertTrue(shared.is_dir())
+        self.assertFalse((self.consumer / 'customizations').exists())
+        entry = json.loads((self.consumer / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(entry['customization']['path'], 'skills/first-skill')
+        local = self.installed() / 'SKILL.md'
+        local.write_text(local.read_text() + '\nSecond shared edit')
+        (self.installed() / 'helper.sh').unlink()
+        self.sync()
+        self.assertEqual(list((self.consumer / 'skills').iterdir()), [shared])
+        self.assertIn('Second shared edit', (shared / 'SKILL.md').read_text())
+        self.assertFalse((shared / 'helper.sh').exists())
+        self.assertEqual(self.git(self.consumer, 'show', first + ':skills/first-skill/helper.sh'), 'echo first')
+        changes = self.git(self.consumer, 'diff', '--name-status', first, 'HEAD')
+        self.assertIn('M\tskills/first-skill/SKILL.md', changes)
+        self.assertIn('D\tskills/first-skill/helper.sh', changes)
+        self.assertNotIn('customizations/', changes)
+
     def test_resolve_shared_conflict_and_return_to_original_upstream(self):
         self.sync()
         old = self.installed().resolve()
@@ -465,6 +502,7 @@ if ((Get-Content -LiteralPath (Join-Path $shared 'SKILL.md') -Raw) -notmatch 'Sh
         self.sync()
         self.assertEqual(self.installed().resolve(), old)
         self.assertNotIn('Shared edit', (self.installed() / 'SKILL.md').read_text())
+        self.assertFalse((self.consumer / 'skills/first-skill').exists())
 
     def test_keep_shared_resolution_advances_base_without_losing_edits(self):
         self.sync()

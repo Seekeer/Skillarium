@@ -78,6 +78,8 @@ def validate_entry(name, entry):
         if not isinstance(custom, dict) or any(not re.fullmatch(r'[0-9a-f]{64}', custom.get(key, ''))
                                                for key in ('content_sha256', 'base_sha256')):
             raise ValueError('Invalid customization hashes')
+        if custom.get('path') not in (None, 'skills/' + name):
+            raise ValueError('Invalid shared skill path')
         if custom.get('base_sha256') != entry.get('content_sha256') or custom.get('base_revision') != entry.get('revision'):
             raise ValueError('Customization base differs from approved source pin')
     source = entry['source']
@@ -205,7 +207,7 @@ def materialize(name, entry, approved=True):
         folder = Path(temporary) / 'content'
         folder.mkdir()
         if custom:
-            shared = shared_snapshot(name, entry)
+            shared = shared_skill(name, entry)
             shutil.copytree(shared, folder, dirs_exist_ok=True)
         elif source['kind'] == 'git':
             revision = revision if approved else latest_revision(source)
@@ -229,15 +231,18 @@ def materialize(name, entry, approved=True):
         return final, revision, content_hash
 
 
-def shared_snapshot(name, entry):
+def shared_skill(name, entry):
     validate_entry(name, entry)
     expected = entry['customization']['content_sha256']
-    folder = ROOT / 'customizations' / name / expected
-    for path in (ROOT / 'customizations', folder.parent, folder):
+    relative = entry['customization'].get('path') or f'customizations/{name}/{expected}'
+    folder = ROOT / relative
+    for path in (folder, *folder.parents):
+        if path == ROOT:
+            break
         if path.is_symlink():
-            raise ValueError('Shared snapshot path contains a symlink')
+            raise ValueError('Shared skill path contains a symlink')
     if not folder.is_dir() or tree_hash(folder) != expected:
-        raise ValueError('Shared snapshot content differs from its hash')
+        raise ValueError('Shared skill content differs from its hash')
     validate_skill(folder, name)
     return folder
 
@@ -280,7 +285,7 @@ def check(args):
     for name, entry in data['skills'].items():
         try:
             if entry.get('customization'):
-                shared_snapshot(name, entry)
+                shared_skill(name, entry)
             conflict = local_conflict(name, entry)
             try:
                 incoming, revision, digest = materialize(name, entry, approved=False)
@@ -288,7 +293,7 @@ def check(args):
                 if not conflict and entry.get('customization'):
                     reports[name] = dict(status='upstream-conflict',
                         base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
-                        shared=dict(path=str(shared_snapshot(name, entry)), **entry['customization']),
+                        shared=dict(entry['customization'], path=str(shared_skill(name, entry))),
                         upstream_error=str(error))
                     print(f'{name}: upstream-conflict; upstream unavailable; shared customization preserved')
                     failed = True
@@ -314,7 +319,7 @@ def check(args):
                 if entry.get('customization'):
                     reports[name] = dict(status='upstream-conflict',
                         base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
-                        shared=dict(path=str(shared_snapshot(name, entry)), **entry['customization']),
+                        shared=dict(entry['customization'], path=str(shared_skill(name, entry))),
                         incoming=dict(path=str(incoming), revision=revision, content_sha256=digest))
                     print(f'{name}: upstream-conflict; shared customization preserved; manual resolution required')
                     failed = True
@@ -326,7 +331,7 @@ def check(args):
                     status = 'updated'
             reports[name] = dict(status=status, revision=revision, content_sha256=digest)
             if entry.get('customization'):
-                reports[name]['shared'] = dict(path=str(shared_snapshot(name, entry)), **entry['customization'])
+                reports[name]['shared'] = dict(entry['customization'], path=str(shared_skill(name, entry)))
             print(f'{name}: {status}')
         except Exception as error:
             reports[name] = dict(status='error', error=str(error))
@@ -353,7 +358,7 @@ def resolve(args):
     entry = data['skills'].get(args.name)
     if not entry or not entry.get('customization'):
         raise ValueError('Skill has no shared customization')
-    shared_snapshot(args.name, entry)
+    shared_skill(args.name, entry)
     if entry['customization']['content_sha256'] != args.shared_hash:
         raise ValueError('Shared customization moved since review')
     if local_conflict(args.name, entry):
@@ -361,8 +366,11 @@ def resolve(args):
     _, revision, digest = materialize(args.name, entry, approved=False)
     if revision != args.revision:
         raise ValueError('Source moved since review')
+    shared = shared_skill(args.name, entry)
     entry.update(revision=revision, content_sha256=digest)
     if args.strategy == 'take-upstream':
+        if entry['customization'].get('path'):
+            shutil.rmtree(shared)
         del entry['customization']
     else:
         entry['customization'].update(base_revision=revision, base_sha256=digest)

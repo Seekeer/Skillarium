@@ -1,5 +1,6 @@
 """Server ownership, deployment and publication against disposable catalogs."""
 import json
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
@@ -25,6 +26,80 @@ class MaintenanceTests(unittest.TestCase):
                                 env=f.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result.stdout + result.stderr
+
+    def legacy_customizations(self):
+        f = self.fixture
+        spec = importlib.util.spec_from_file_location('skills', ROOT / 'server/skills.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        data = json.loads((f.seed / 'sources.json').read_text())
+        entry = data['skills']['first-skill']
+        versions = []
+        for text in ['First customization', 'Current customization']:
+            content = f.root / 'legacy-content'
+            content.mkdir()
+            shutil.copyfile(f.upstream / 'skills/first-skill/SKILL.md', content / 'SKILL.md')
+            with (content / 'SKILL.md').open('a') as stream:
+                stream.write('\n' + text)
+            (content / 'helper.sh').write_bytes(b'#!/bin/sh\necho shared\n')
+            (content / 'helper.sh').chmod(0o755)
+            digest = module.tree_hash(content)
+            destination = f.seed / 'customizations/first-skill' / digest
+            shutil.copytree(content, destination)
+            shutil.rmtree(content)
+            versions.append(destination)
+        entry['customization'] = dict(content_sha256=versions[-1].name,
+            base_sha256=entry['content_sha256'], base_revision=entry['revision'])
+        (f.seed / 'sources.json').write_text(json.dumps(data))
+        f.commit(f.seed, 'Legacy customizations')
+        f.git(f.seed, 'push')
+        return versions
+
+    def test_legacy_versions_migrate_to_stable_path_with_git_history(self):
+        f = self.fixture
+        versions = self.legacy_customizations()
+        previous = f.git(f.seed, 'rev-parse', 'HEAD')
+        self.assertIn('migrate shared skills', self.manage('deploy-client', '--dry-run'))
+        self.assertFalse((f.seed / 'skills').exists())
+        self.assertTrue(versions[-1].exists())
+        self.manage('deploy-client', '--publish')
+        shared = f.seed / 'skills/first-skill'
+        self.assertIn('Current customization', (shared / 'SKILL.md').read_text())
+        self.assertTrue((shared / 'helper.sh').stat().st_mode & 0o111)
+        self.assertFalse((f.seed / 'customizations').exists())
+        entry = json.loads((f.seed / 'sources.json').read_text())['skills']['first-skill']
+        self.assertEqual(entry['customization']['path'], 'skills/first-skill')
+        self.assertIn('First customization', f.git(f.seed, 'show', previous + ':' + versions[0].relative_to(f.seed).as_posix() + '/SKILL.md'))
+        current = f.git(f.seed, 'rev-parse', 'HEAD')
+        self.manage('deploy-client', '--publish')
+        self.assertEqual(f.git(f.seed, 'rev-parse', 'HEAD'), current)
+        f.sync()
+        self.assertIn('Current customization', (f.installed() / 'SKILL.md').read_text())
+
+    def test_migration_preserves_unrecognized_existing_stable_folder(self):
+        f = self.fixture
+        versions = self.legacy_customizations()
+        shared = f.seed / 'skills/first-skill'
+        shared.mkdir(parents=True)
+        (shared / 'private.txt').write_text('keep')
+        f.commit(f.seed, 'Foreign shared folder')
+        f.git(f.seed, 'push')
+        self.assertIn('differs; preserved', self.manage('deploy-client', '--publish', expected=1))
+        self.assertEqual((shared / 'private.txt').read_text(), 'keep')
+        self.assertTrue(versions[-1].exists())
+
+    def test_migration_preserves_modified_legacy_history(self):
+        f = self.fixture
+        versions = self.legacy_customizations()
+        local = versions[0] / 'helper.sh'
+        local.write_text('unrecognized edits')
+        f.commit(f.seed, 'Edited old legacy version')
+        f.git(f.seed, 'push')
+        before = (f.seed / 'sources.json').read_bytes()
+        self.assertIn('unrecognized edits; preserved', self.manage('deploy-client', '--publish', expected=1))
+        self.assertEqual(local.read_text(), 'unrecognized edits')
+        self.assertEqual((f.seed / 'sources.json').read_bytes(), before)
+        self.assertFalse((f.seed / 'skills').exists())
 
     def test_client_deployment_upgrade_and_repeat_preserve_registry(self):
         f = self.fixture

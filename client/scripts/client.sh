@@ -116,8 +116,16 @@ install_entry() (
         trap 'rm -rf -- "$temporary"' EXIT
         mkdir -- "$temporary/content" || return 1
         if jq -e '.value.customization != null' <<< "$record" >/dev/null; then
-            local shared="$repo/customizations/$name/$expected"
-            [[ ! -L "$repo/customizations" && ! -L "$repo/customizations/$name" && ! -L "$shared" ]] || return 1
+            local shared_relative shared
+            shared_relative=$(jq -r '.value.customization.path // empty' <<< "$record") || return 1
+            if [[ -n "$shared_relative" ]]; then
+                [[ "$shared_relative" == "skills/$name" && ! -L "$repo/skills" ]] || return 1
+            else
+                shared_relative="customizations/$name/$expected"
+                [[ ! -L "$repo/customizations" && ! -L "$repo/customizations/$name" ]] || return 1
+            fi
+            shared="$repo/$shared_relative"
+            [[ ! -L "$shared" ]] || return 1
             validate_skill "$shared" "$expected" || return 1
             cp -a -- "$shared/." "$temporary/content/" || return 1
         else
@@ -175,9 +183,10 @@ install_registry() {
     return "$errors"
 }
 
-# Publish complete customized snapshots, retaining the original source pin.
+# Commit edits at a stable skill path, retaining the original source pin.
 publish_local_changes() (
-    local record name expected link old actual selected destination temporary updated changed=0 relative
+    local record name expected link old actual selected destination temporary updated changed=0 relative previous
+    local -a paths=(sources.json)
     [[ -z $(git -C "$repo" status --porcelain --untracked-files=all) ]] || return 1
     temporary=$(mktemp -d "$(git -C "$repo" rev-parse --absolute-git-dir)/shared-XXXXXX") || return 1
     trap 'rm -rf -- "$temporary"' EXIT
@@ -200,19 +209,20 @@ publish_local_changes() (
             fi
             selected=$actual
             [[ -f "$old/SKILL.md" ]] || { echo "Missing SKILL.md (kept): $name" >&2; return 1; }
-            mkdir -p -- "$temporary/customizations/$name" || return 1
-            destination="$temporary/customizations/$name/$actual"
+            mkdir -p -- "$temporary/skills" || return 1
+            destination="$temporary/skills/$name"
             if [[ ! -d "$destination" ]]; then cp -a -- "$old" "$destination" || return 1; fi
             [[ $(tree_hash "$destination") == "$actual" && $(tree_hash "$old") == "$actual" ]] || return 1
-            # Git metadata could alter snapshot bytes or execute local filters.
+            # Git metadata could alter shared file bytes or execute local filters.
             while IFS= read -r -d '' relative; do
                 safe_path "${relative#"$destination/"}" || return 1
-                case "/${relative#"$destination/"}/" in */.git/*|*/.gitattributes/*) echo 'Git metadata in shared snapshots is unsupported.' >&2; return 1;; esac
+                case "/${relative#"$destination/"}/" in */.git/*|*/.gitattributes/*) echo 'Git metadata in shared skills is unsupported.' >&2; return 1;; esac
             done < <(find "$destination" -mindepth 1 -print0)
         done
         [[ -n "$selected" ]] || continue
         updated=$(jq --arg name "$name" --arg digest "$selected" '
             .skills[$name].customization = {
+                path: ("skills/" + $name),
                 content_sha256: $digest,
                 base_sha256: .skills[$name].content_sha256,
                 base_revision: .skills[$name].revision
@@ -221,23 +231,36 @@ publish_local_changes() (
         changed=1
     done < <(jq -c '.skills | to_entries[]' "$repo/sources.json")
     ((changed)) || return 0
-    [[ ! -L "$repo/customizations" ]] || return 1
-    if [[ -d "$repo/customizations" ]]; then
-        # Never copy through pre-existing symlink parents or overwrite snapshots.
-        [[ -z $(find "$repo/customizations" -type l -print -quit) ]] || return 1
-    fi
+    [[ ! -L "$repo/skills" ]] || return 1
+    # Verify every destination before replacing any skill. Git must be clean,
+    # and existing content must match the registered shared version.
     while IFS= read -r -d '' destination; do
-        relative=${destination#"$temporary/"}
+        name=${destination##*/}
+        relative="skills/$name"
+        previous=$(jq -r --arg name "$name" '.skills[$name].customization.content_sha256 // empty' "$repo/sources.json") || return 1
+        [[ ! -L "$repo/$relative" ]] || return 1
         if [[ -e "$repo/$relative" ]]; then
-            [[ $(tree_hash "$repo/$relative") == "${destination##*/}" ]] || return 1
-        else
-            mkdir -p -- "$repo/$(dirname "$relative")" || return 1
-            cp -a -- "$destination" "$repo/$relative" || return 1
+            [[ -n "$previous" ]] && validate_skill "$repo/$relative" "$previous" || {
+                echo "Unrecognized shared skill preserved: $name" >&2; return 1;
+            }
         fi
-    done < <(find "$temporary/customizations" -mindepth 2 -maxdepth 2 -type d -print0)
+        paths+=("$relative")
+    done < <(find "$temporary/skills" -mindepth 1 -maxdepth 1 -type d -print0)
+    while IFS= read -r -d '' destination; do
+        relative="skills/${destination##*/}"
+        # The verified old tree is in Git; replacement also records deletions.
+        if [[ -d "$repo/$relative" ]]; then
+            name=${destination##*/}
+            previous=$(jq -er --arg name "$name" '.skills[$name].customization.content_sha256' "$repo/sources.json") || return 1
+            validate_skill "$repo/$relative" "$previous" || return 1
+            rm -rf -- "$repo/$relative" || return 1
+        fi
+        mkdir -p -- "$repo/skills" || return 1
+        cp -a -- "$destination" "$repo/$relative" || return 1
+    done < <(find "$temporary/skills" -mindepth 1 -maxdepth 1 -type d -print0)
     cp -- "$temporary/sources.json" "$repo/sources.json" || return 1
-    git -C "$repo" add -f -- sources.json customizations || return 1
+    git -C "$repo" add -f -A -- "${paths[@]}" || return 1
     git -C "$repo" -c user.name=agent-skills -c user.email=agent-skills@localhost commit \
-        -m $'Share local skill customizations\n\nAgent-Skills-Client: 1' -- sources.json customizations || return 1
+        -m $'Share local skill customizations\n\nAgent-Skills-Client: 1' -- "${paths[@]}" || return 1
     git -C "$repo" -c credential.interactive=false push || return 1
 )

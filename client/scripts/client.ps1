@@ -146,10 +146,17 @@ function Install-SkillEntry {
         [IO.Directory]::CreateDirectory($content) | Out-Null
         try {
             if ($Entry.customization) {
-                $shared = Join-Path $repo "customizations\$Name\$expected"
-                foreach ($path in @((Join-Path $repo 'customizations'), (Join-Path $repo "customizations\$Name"), $shared)) {
+                if ($Entry.customization.path) {
+                    if ($Entry.customization.path -cne "skills/$Name") { throw 'Invalid shared skill path.' }
+                    $shared = Join-Path $repo "skills\$Name"
+                    $parents = @((Join-Path $repo 'skills'), $shared)
+                } else {
+                    $shared = Join-Path $repo "customizations\$Name\$expected"
+                    $parents = @((Join-Path $repo 'customizations'), (Join-Path $repo "customizations\$Name"), $shared)
+                }
+                foreach ($path in $parents) {
                     $item = Get-Item -LiteralPath $path -Force
-                    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared snapshot path contains a reparse point.' }
+                    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared skill path contains a reparse point.' }
                 }
                 Assert-Version -Directory $shared -Expected $expected
                 foreach ($item in Get-ChildItem -LiteralPath $shared -Force) {
@@ -233,7 +240,7 @@ function Publish-LocalChanges {
     [IO.Directory]::CreateDirectory($temporary) | Out-Null
     try {
         $registry = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-        $snapshots = @()
+        $sharedPaths = @()
         foreach ($property in $registry.skills.PSObject.Properties) {
             $name = $property.Name
             $entry = $property.Value
@@ -258,49 +265,63 @@ function Publish-LocalChanges {
                 }
                 if (-not (Test-Path -LiteralPath (Join-Path $old 'SKILL.md') -PathType Leaf)) { throw "Missing SKILL.md (kept): $name" }
                 $selected = $actual
-                $destination = Join-Path $temporary "customizations\$name\$actual"
+                $destination = Join-Path $temporary "skills\$name"
                 if (-not (Test-Path -LiteralPath $destination)) {
                     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
                     Copy-Item -LiteralPath $old -Destination $destination -Recurse
                 }
                 if ((Get-TreeHash -Directory $destination) -cne $actual -or (Get-TreeHash -Directory $old) -cne $actual) {
-                    throw 'Skill changed during snapshot; preserved.'
+                    throw 'Skill changed during copy; preserved.'
                 }
                 foreach ($file in Get-ChildItem -LiteralPath $destination -Force -Recurse) {
                     $relative = $file.FullName.Substring($destination.Length + 1).Replace('\', '/')
                     Assert-SafePath -RelativePath $relative
-                    if ($relative -match '(^|/)(\.git|\.gitattributes)(/|$)') { throw 'Git metadata in shared snapshots is unsupported.' }
+                    if ($relative -match '(^|/)(\.git|\.gitattributes)(/|$)') { throw 'Git metadata in shared skills is unsupported.' }
                 }
             }
             if ($selected) {
                 $entry | Add-Member -NotePropertyName customization -NotePropertyValue ([PSCustomObject]@{
-                    content_sha256 = $selected; base_sha256 = $entry.content_sha256; base_revision = $entry.revision
+                    path = "skills/$name"; content_sha256 = $selected
+                    base_sha256 = $entry.content_sha256; base_revision = $entry.revision
                 }) -Force
-                $snapshots += "customizations\$name\$selected"
+                $sharedPaths += "skills/$name"
             }
         }
-        if (-not $snapshots.Count) { return }
-        $sharedRoot = Join-Path $repo 'customizations'
-        if (Test-Path -LiteralPath $sharedRoot) {
-            $items = @(Get-Item -LiteralPath $sharedRoot -Force) + @(Get-ChildItem -LiteralPath $sharedRoot -Force -Recurse)
-            foreach ($item in $items) {
-                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared snapshot path contains a reparse point.' }
+        if (-not $sharedPaths.Count) { return }
+        $sharedRoot = Join-Path $repo 'skills'
+        $root = Get-Item -LiteralPath $sharedRoot -Force -ErrorAction SilentlyContinue
+        if ($root -and ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Shared skill path contains a reparse point.'
+        }
+        # The on-disk registry still contains the previous hashes.
+        $previous = Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($relative in $sharedPaths) {
+            $destination = Join-Path $repo $relative
+            $name = Split-Path $destination -Leaf
+            $item = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+            if ($item) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Shared skill path contains a reparse point.' }
+                $oldEntry = $previous.skills.PSObject.Properties[$name].Value
+                if (-not $oldEntry.customization) { throw "Unrecognized shared skill preserved: $name" }
+                Assert-Version -Directory $destination -Expected $oldEntry.customization.content_sha256
             }
         }
-        foreach ($relative in $snapshots) {
+        foreach ($relative in $sharedPaths) {
             $destination = Join-Path $repo $relative
             if (Test-Path -LiteralPath $destination) {
-                Assert-Version -Directory $destination -Expected ([IO.Path]::GetFileName($destination))
-            } else {
-                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
-                Copy-Item -LiteralPath (Join-Path $temporary $relative) -Destination $destination -Recurse
+                $name = Split-Path $destination -Leaf
+                $oldEntry = $previous.skills.PSObject.Properties[$name].Value
+                Assert-Version -Directory $destination -Expected $oldEntry.customization.content_sha256
+                Remove-Item -LiteralPath $destination -Recurse -Force
             }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination)) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $temporary $relative) -Destination $destination -Recurse
         }
         $json = ($registry | ConvertTo-Json -Depth 30) + "`n"
         [IO.File]::WriteAllText((Join-Path $repo 'sources.json'), $json, (New-Object Text.UTF8Encoding($false)))
-        Invoke-Git -GitArgs @('add', '-f', '--', 'sources.json', 'customizations') | Out-Null
-        Invoke-Git -GitArgs @('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
-            'commit', '-m', "Share local skill customizations`n`nAgent-Skills-Client: 1", '--', 'sources.json', 'customizations') | Out-Null
+        Invoke-Git -GitArgs (@('add', '-f', '-A', '--', 'sources.json') + $sharedPaths) | Out-Null
+        Invoke-Git -GitArgs (@('-c', 'user.name=agent-skills', '-c', 'user.email=agent-skills@localhost',
+            'commit', '-m', "Share local skill customizations`n`nAgent-Skills-Client: 1", '--', 'sources.json') + $sharedPaths) | Out-Null
         Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'push') | Out-Null
     } finally {
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
