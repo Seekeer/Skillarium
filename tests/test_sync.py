@@ -159,10 +159,14 @@ class LinuxClientTests(unittest.TestCase):
         (lib.installed() / 'local.md').write_text('laptop')
         lib.sync(self.client)
         laptop = [p for p in lib.host.pulls.values() if p['head'].startswith('agent-skills/sync/laptop')][0]
-        lib.host.auto_process = True
+        # The other station's proposal is accepted first, while this one waits for checks.
+        waiting, laptop['scheduled'] = laptop['scheduled'], None
         (lib.installed(home=home) / 'remote.md').write_text('desk')
         lib.sync(peer, home=home)
         lib.host.process()
+        laptop['scheduled'] = waiting
+        lib.host.process()
+        lib.host.auto_process = True
         self.assertFalse(laptop['merged'])
         self.assertTrue(any('outdated' in e for e in laptop.get('rejections', [])), laptop)
         lib.sync(self.client)

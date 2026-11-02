@@ -290,7 +290,7 @@ open_pull() {
         [[ -n "$found" ]] && { printf '%s\n' "$found"; return 0; }
         count=$(jq length <<< "$api_body") || return 1
         ((count < 50)) && return 0
-        ((page++))
+        page=$((page + 1))
     done
 }
 
@@ -434,7 +434,7 @@ list_updates() {
         [[ -n "$ref" ]] || continue
         message=$(git -C "$repo" log -1 --format=%B "$ref") || return 1
         echo "UPDATE $(trailer "$message" Proposal): $(trailer "$message" Status), policy $(trailer "$message" Policy), incoming $(trailer "$message" Incoming-Revision | cut -c1-12), commit $(git -C "$repo" rev-parse "$ref")"
-        ((count++))
+        count=$((count + 1))
     done < <(proposal_refs)
     ((count)) || echo 'No pending external updates.'
 }

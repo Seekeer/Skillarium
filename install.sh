@@ -38,14 +38,15 @@ if ! flock -n 9; then echo 'Another sync is running; skipped.'; exit 0; fi
 source "$repo/scripts/client.sh"
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
+# Client functions report their own errors; errexit stays off inside them.
 case "$mode" in
-    --status) show_status; exit ;;
+    --status) show_status && exit 0; exit 1 ;;
     --updates)
         git -C "$repo" -c credential.interactive=false fetch -q --prune origin || echo 'Offline: showing known proposals.' >&2
-        list_updates; exit ;;
-    --review) review_update "$2"; exit ;;
-    --approve) approve_update "$2" "$3"; exit ;;
-    --resolve) resolve_update "$2" "$3" "$4"; exit ;;
+        list_updates && exit 0; exit 1 ;;
+    --review) review_update "$2" && exit 0; exit 1 ;;
+    --approve) approve_update "$2" "$3" && exit 0; exit 1 ;;
+    --resolve) resolve_update "$2" "$3" "$4" && exit 0; exit 1 ;;
 esac
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
