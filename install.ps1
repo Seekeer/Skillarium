@@ -43,11 +43,14 @@ try {
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
     . (Join-Path $repo 'scripts\client.ps1')
+    . (Join-Path $repo 'scripts\bindings.ps1')
     if ($Mode -ne 'Link') {
         try { Sync-Repository }
         catch { Write-Warning $_.Exception.Message; $failed = $true }
     }
-    Install-Registry
+    # Global links and registered project bindings follow the local choices.
+    Read-Bindings
+    if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -in @('Install', 'Sync')) {
         $launcher = Join-Path $repo 'scripts\sync-hidden.vbs'

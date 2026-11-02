@@ -203,7 +203,10 @@ function Sync-Repository {
 
 function New-SkillLink {
     param([string]$Path, [string]$Target)
-    New-Item -ItemType Junction -Path $Path -Target $Target | Out-Null
+    # Junctions need no privileges on Windows; PowerShell on Linux uses symlinks.
+    $type = 'SymbolicLink'
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $type = 'Junction' }
+    New-Item -ItemType $type -Path $Path -Target $Target | Out-Null
 }
 
 function Set-SkillLinks {
@@ -238,14 +241,4 @@ function Set-SkillLinks {
         } catch { Write-Warning $_.Exception.Message; $failed = $true }
     }
     if ($failed) { throw "Link installation incomplete: $Name" }
-}
-
-function Install-Registry {
-    $registry = Get-Registry
-    $failed = $false
-    foreach ($property in $registry.skills.PSObject.Properties) {
-        try { Set-SkillLinks -Name $property.Name }
-        catch { Write-Warning $_.Exception.Message; $failed = $true }
-    }
-    if ($failed) { throw 'Some catalog skills could not be linked.' }
 }
