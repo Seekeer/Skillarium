@@ -424,6 +424,14 @@ class ProjectBindingTests(unittest.TestCase):
         self.background()
         self.assert_project_bound(a)
         self.projects('unbind', a, SHARED, expected=3)
+        # Only an explicit unregister ends the registration; global access stays as chosen.
+        a.rename(moved)
+        self.projects('unregister', a)
+        self.assertEqual([row['path'] for row in self.status()['projects']], [str(b)])
+        self.assert_global(False)
+        moved.rename(a)
+        self.background()
+        self.assertEqual(self.project_list(a), [SHARED])
 
     # 11 ----------------------------------------------------------------------
     def test_restart_retry_and_concurrent_background_runs(self):

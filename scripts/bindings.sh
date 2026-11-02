@@ -342,7 +342,7 @@ cmd_unbind() {
     if grep -qxF -- "$name" <<<"$names"; then
         while IFS= read -r other; do
             [[ -n "$other" && "$other" != "$project" ]] || continue
-            if project_skills "$other" | grep -qxF -- "$name"; then others=1; break; fi
+            if grep -qxF -- "$name" <<<"$(project_skills "$other")"; then others=1; break; fi
         done < <(jq -r '.projects | keys[]' <<<"$state")
         if ((others == 0)) && [[ -z "$choice" ]]; then
             # The UI asks; cancelling keeps the binding because nothing changed yet.
