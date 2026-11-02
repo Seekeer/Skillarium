@@ -1,42 +1,72 @@
 #!/usr/bin/env bash
+# Install the daily server timer of the unified library on the assigned machine.
+# A managed timer of the former separate agent-skills-updater is switched off
+# first, so old and new maintenance never run side by side.
 set -euo pipefail
-updater=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+library=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-case "${1:---install}" in
-    --uninstall)
-        systemctl --user disable --now agent-skills-updater.timer
-        for unit in agent-skills-updater.service agent-skills-updater.timer; do
-            if [[ -f "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") == '# Managed by agent-skills-updater' ]]; then
-                rm -- "$unit_dir/$unit"
-            fi
-        done
-        systemctl --user daemon-reload
-        exit 0 ;;
-    --install) ;;
-    *) echo 'Usage: bash server/install.sh [--install|--uninstall]' >&2; exit 2 ;;
+marker='# Managed by agent-skills-server'
+legacy_marker='# Managed by agent-skills-updater'
+mode=${1:---install}
+machine=${2:-}
+case "$mode" in
+    --install|--uninstall) ;;
+    *) echo 'Usage: bash server/install.sh [--install [<machine-name>]|--uninstall]' >&2; exit 2 ;;
 esac
-mkdir -p -- "$unit_dir"
-for unit in agent-skills-updater.service agent-skills-updater.timer; do
-    if [[ -e "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") != '# Managed by agent-skills-updater' ]]; then
+
+remove_managed() {
+    local expected=$1 unit
+    shift
+    for unit in "$@"; do
+        if [[ -f "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") == "$expected" ]]; then
+            rm -- "$unit_dir/$unit"; echo "Removed $unit"
+        fi
+    done
+}
+
+if [[ "$mode" == --uninstall ]]; then
+    systemctl --user disable --now agent-skills-server.timer || true
+    remove_managed "$marker" agent-skills-server.service agent-skills-server.timer
+    systemctl --user daemon-reload
+    exit 0
+fi
+
+for unit in agent-skills-server.service agent-skills-server.timer; do
+    if [[ -e "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") != "$marker" ]]; then
         echo "Existing unmanaged unit preserved: $unit" >&2; exit 1
     fi
 done
-path=$updater
+for unit in agent-skills-updater.service agent-skills-updater.timer; do
+    if [[ -e "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") != "$legacy_marker" ]]; then
+        echo "Unrecognized legacy unit preserved; switch it off manually: $unit" >&2; exit 1
+    fi
+done
+if [[ -n "$machine" ]]; then
+    git -C "$library" config agent-skills.machine "$machine"
+fi
+if [[ -f "$unit_dir/agent-skills-updater.timer" ]]; then
+    # The separate updater checkout itself, with any local work, stays untouched.
+    systemctl --user disable --now agent-skills-updater.timer || true
+    systemctl --user stop agent-skills-updater.service || true
+    remove_managed "$legacy_marker" agent-skills-updater.service agent-skills-updater.timer
+fi
+path=$library
 path=${path//\\/\\\\}; path=${path//\"/\\\"}
 path=${path//%/%%}; path=${path//\$/\$\$}
-cat >"$unit_dir/agent-skills-updater.service" <<EOF
-# Managed by agent-skills-updater
+mkdir -p -- "$unit_dir"
+cat >"$unit_dir/agent-skills-server.service" <<EOF
+$marker
 [Unit]
-Description=Maintain skill catalogs and distribute native client updates
+Description=Maintain the shared skill library on the assigned server
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/bash "$path/server/run.sh"
 TimeoutStartSec=15min
 EOF
-cat >"$unit_dir/agent-skills-updater.timer" <<'EOF'
-# Managed by agent-skills-updater
+cat >"$unit_dir/agent-skills-server.timer" <<EOF
+$marker
 [Unit]
-Description=Maintain skill catalogs daily
+Description=Maintain the shared skill library daily
 [Timer]
 OnCalendar=daily
 Persistent=true
@@ -45,4 +75,6 @@ RandomizedDelaySec=10min
 WantedBy=timers.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now agent-skills-updater.timer
+systemctl --user enable --now agent-skills-server.timer
+echo "Installed server timer for machine $(git -C "$library" config --get agent-skills.machine || hostname -s)."
+echo 'The assigned server is set in agent-skills.json; see: python3 server/manage.py status'

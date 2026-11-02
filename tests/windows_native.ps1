@@ -3,11 +3,8 @@
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows is required.' }
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$scheduledName = "AgentSkills-Hourly-$($identity.User.Value)"
-if (Get-ScheduledTask -TaskName $scheduledName -ErrorAction SilentlyContinue) {
-    throw 'An existing agent-skills task was found; use a disposable Windows account.'
-}
+# A unique task name keeps an existing installation of this account untouched.
+$scheduledName = 'AgentSkills-Test-' + [Guid]::NewGuid().ToString('N')
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('agent skills windows ' + [Guid]::NewGuid().ToString('N'))
 $testHome = Join-Path $testRoot 'isolated profile'
 $seed = Join-Path $testRoot 'controller'
@@ -45,11 +42,14 @@ try {
     $env:GIT_AUTHOR_NAME = $env:GIT_COMMITTER_NAME = 'agent-skills-test'
     $env:GIT_AUTHOR_EMAIL = $env:GIT_COMMITTER_EMAIL = 'test@example.invalid'
 
-    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/sync-hidden.vbs', '.gitattributes')) {
+    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
-        Copy-Item -LiteralPath (Join-Path $projectRoot "client/$relative") -Destination $destination
+        Copy-Item -LiteralPath (Join-Path $projectRoot $relative) -Destination $destination
     }
+    $installerText = [IO.File]::ReadAllText((Join-Path $seed 'install.ps1'))
+    $installerText = $installerText.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $scheduledName + '"'))
+    [IO.File]::WriteAllText((Join-Path $seed 'install.ps1'), $installerText, (New-Object Text.UTF8Encoding($false)))
     $payload = Join-Path $seed 'skills/windows-ci'
     [IO.Directory]::CreateDirectory($payload) | Out-Null
     [IO.File]::WriteAllText((Join-Path $payload 'SKILL.md'), "---`nname: windows-ci`ndescription: Native Windows test`n---`nInitial")
@@ -93,11 +93,8 @@ try {
     # Do not start this task: a new login session would use the runner's real HOME.
     Disable-ScheduledTask -TaskName $scheduledName | Out-Null
 
+    # Publication of local edits goes through pull requests: see tests/test_powershell.py.
     $installed = Join-Path $testHome '.agents/skills/windows-ci/SKILL.md'
-    [IO.File]::AppendAllText($installed, "`nLocal Windows edit")
-    & $installer -Mode Sync
-    Invoke-TestGit -Directory $seed -Arguments @('pull', '--ff-only') | Out-Null
-    Test-Assert ([IO.File]::ReadAllText((Join-Path $seed 'skills/windows-ci/SKILL.md')).Contains('Local Windows edit')) 'Local edit was not published.'
     $helper = [IO.File]::ReadAllBytes((Join-Path $consumer 'skills/windows-ci/helper.ps1'))
     Test-Assert ([Text.Encoding]::UTF8.GetString($helper) -ceq "Write-Output test`r`n") 'Skill CRLF bytes changed.'
 

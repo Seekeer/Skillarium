@@ -3,14 +3,18 @@
 set -euo pipefail
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 mode=${1:---install}
+usage='Usage: bash install.sh [--install|--sync-only|--link-only|--uninstall|--status|--updates]
+       bash install.sh --review <skill> | --approve <skill> <commit> | --resolve <skill> <commit> keep-ours|take-upstream|merged'
+expected=1
 case "$mode" in
-    --install|--sync-only|--link-only|--uninstall) ;;
-    --help|-h)
-        echo 'Usage: bash install.sh [--install|--sync-only|--link-only|--uninstall]'
-        exit 0 ;;
+    --install|--sync-only|--link-only|--uninstall|--status|--updates) ;;
+    --review) expected=2 ;;
+    --approve) expected=3 ;;
+    --resolve) expected=4 ;;
+    --help|-h) echo "$usage"; exit 0 ;;
     *) echo "Unknown mode: $mode" >&2; exit 2 ;;
 esac
-if (($# > 1)); then echo 'Expected one mode argument.' >&2; exit 2; fi
+if (($# > expected || ($# < expected && expected > 1))); then echo "$usage" >&2; exit 2; fi
 
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 if [[ "$mode" == --uninstall ]]; then
@@ -34,6 +38,15 @@ if ! flock -n 9; then echo 'Another sync is running; skipped.'; exit 0; fi
 source "$repo/scripts/client.sh"
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
+case "$mode" in
+    --status) show_status; exit ;;
+    --updates)
+        git -C "$repo" -c credential.interactive=false fetch -q --prune origin || echo 'Offline: showing known proposals.' >&2
+        list_updates; exit ;;
+    --review) review_update "$2"; exit ;;
+    --approve) approve_update "$2" "$3"; exit ;;
+    --resolve) resolve_update "$2" "$3" "$4"; exit ;;
+esac
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
 install_registry || result=1

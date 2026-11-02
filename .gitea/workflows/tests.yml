@@ -1,7 +1,8 @@
-name: Skill portability and native clients
+name: Skill library and native clients
 
 on:
   push:
+    branches-ignore: ['agent-skills/**']
   pull_request:
   workflow_dispatch:
 
@@ -10,10 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Server and Linux integration tests
+        with:
+          fetch-depth: 0
+      - name: Server, policy, migration and Linux client integration tests
         run: |
-          command -v git
-          command -v jq
+          command -v git jq curl flock
+          git --version
+          python3 server/manage.py client-manifest
           python3 -m unittest discover -s tests -v
 
   windows:
@@ -22,10 +26,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Windows filename policy
+      - name: Server, policy and PowerShell client with real junctions
         shell: powershell
         run: |
-          python -m unittest discover -s tests -p test_windows_paths.py -v
+          python -m unittest discover -s tests -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Windows PowerShell 5.1 installation and native junctions
         shell: powershell

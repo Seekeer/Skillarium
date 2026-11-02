@@ -1,0 +1,24 @@
+name: Library policy
+
+# Required status check of the protected main branch. pull_request_target runs
+# the rule from the base branch, so a proposal cannot change its own check or
+# the server assignment it is checked against.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+      - name: Accept skill content from any machine, control data only from the assigned server
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/base" "+refs/pull/$NUMBER/head:refs/remotes/origin/proposal"
+          python3 server/policy.py --repo . --base refs/remotes/origin/base --head refs/remotes/origin/proposal

@@ -68,10 +68,19 @@ def atomic_json(path, data):
             os.unlink(name)
 
 
-def validate_entry(name, entry):
+def validate_entry_name(name):
     if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', name) or len(name) > 64:
         raise ValueError('Invalid skill name')
     validate_windows_paths([name])
+
+
+def policy_name(entry):
+    """auto: apply compatible updates, ask on conflict; confirm: ask every time."""
+    return 'auto' if entry.get('auto_update') else 'confirm'
+
+
+def validate_entry(name, entry):
+    validate_entry_name(name)
     if not isinstance(entry.get('auto_update'), bool):
         raise ValueError('auto_update must be true or false')
     for record in (entry, entry.get('customization') or {}):
@@ -116,7 +125,10 @@ def validate_entry(name, entry):
 
 
 def validate_skill(path, name=None):
-    text = (path / 'SKILL.md').read_text(encoding='utf-8-sig')
+    return validate_skill_text((path / 'SKILL.md').read_text(encoding='utf-8-sig'), name)
+
+
+def validate_skill_text(text, name=None):
     if not text.startswith('---\n') and not text.startswith('---\r\n'):
         raise ValueError('Missing SKILL.md frontmatter')
     sections = text.split('---', 2)
@@ -532,166 +544,3 @@ def populate_catalog(write=False):
         save_registry(data)
 
 
-def check(args):
-    if args.publish and git('status', '--porcelain').strip():
-        raise ValueError('Publish requires a clean repository')
-    data = load_registry()
-    unknown = set(args.approve) - set(data['skills'])
-    if unknown:
-        raise ValueError('Unknown approval names: ' + ', '.join(sorted(unknown)))
-    if args.expected_revision and len(args.approve) != 1:
-        raise ValueError('--expected-revision requires exactly one --approve')
-    write = getattr(args, 'apply_catalog', False) or args.apply_auto or bool(args.approve)
-    reports = {}
-    changed = False
-    payload_changed = False
-    failed = False
-    for name, entry in data['skills'].items():
-        try:
-            shared, observed, copied, state = prepare_catalog_skill(name, entry, write)
-            changed |= observed
-            payload_changed |= copied
-            if entry['source']['kind'] == 'local':
-                if name in args.approve:
-                    raise ValueError('Local skills have no external update to approve')
-                reports[name] = dict(status='local', path=str(shared), content_sha256=entry['content_sha256'])
-                print(f'{name}: local; no external source')
-                continue
-            try:
-                incoming, revision, digest = materialize(name, entry, approved=False)
-            except Exception as error:
-                if not entry.get('customization'):
-                    raise
-                reports[name] = dict(status='upstream-conflict',
-                    base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
-                    shared=dict(entry['customization'], path=str(shared)), upstream_error=str(error))
-                print(f'{name}: upstream-conflict; upstream unavailable; shared customization preserved')
-                failed = True
-                continue
-            if name in args.approve and args.expected_revision and revision != args.expected_revision:
-                raise ValueError('Source moved since review; expected revision differs')
-            status = 'customized' if entry.get('customization') else 'unchanged'
-            incoming_modes = executable_hash(incoming)
-            if digest != entry['content_sha256'] or incoming_modes != entry['executable_sha256']:
-                if entry.get('customization'):
-                    reports[name] = dict(status='upstream-conflict',
-                        base=dict(revision=entry['revision'], content_sha256=entry['content_sha256']),
-                        shared=dict(entry['customization'], path=str(shared)),
-                        incoming=dict(path=str(incoming), revision=revision, content_sha256=digest))
-                    print(f'{name}: upstream-conflict; manual resolution required')
-                    failed = True
-                    continue
-                status = 'available'
-                if name in args.approve or (args.apply_auto and entry['auto_update']):
-                    store_catalog_skill(name, incoming, expected_state=state)
-                    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(incoming))
-                    changed = payload_changed = True
-                    status = 'updated'
-            reports[name] = dict(status=status, revision=revision, content_sha256=digest)
-            if entry.get('customization'):
-                reports[name]['shared'] = dict(entry['customization'], path=str(shared))
-            print(f'{name}: {status}')
-        except Exception as error:
-            reports[name] = dict(status='error', error=str(error))
-            print(f'ERROR {name}: {error}', file=sys.stderr)
-            failed = True
-    if write and changed:
-        save_registry(data)
-    report_path = Path(git('rev-parse', '--git-path', 'skill-updates.json').decode().strip())
-    if not report_path.is_absolute():
-        report_path = ROOT / report_path
-    atomic_json(report_path, reports)
-    print(f'Checked {len(reports)} source(s); report: {report_path}')
-    if args.publish:
-        validate_catalog_windows_paths()
-        if write and (changed or payload_changed):
-            git('add', '--', 'sources.json')
-            git('commit', '-m', 'Update approved skills and source metadata')
-        git('push')
-    return 1 if failed else 0
-
-
-def resolve(args):
-    data = load_registry()
-    entry = data['skills'].get(args.name)
-    if not entry or entry['source']['kind'] == 'local':
-        raise ValueError('Skill has no external source')
-    if args.strategy == 'detach':
-        folder = catalog_folder(args.name)
-        actual = validate_local_content(folder, args.name, catalog=True)
-        if actual != args.shared_hash:
-            raise ValueError('Shared customization moved since review')
-        data['skills'][args.name] = dict(source=dict(kind='local', path='skills/' + args.name),
-            auto_update=False, revision=actual, content_sha256=actual,
-            executable_sha256=executable_hash(folder, catalog=True))
-        save_registry(data)
-        print(f'{args.name}: resolved (detach; kept as local skill)')
-        return 0
-    _, _, _, state = prepare_catalog_skill(args.name, entry)
-    if not entry.get('customization'):
-        raise ValueError('Skill has no shared customization')
-    if entry['customization']['content_sha256'] != args.shared_hash:
-        raise ValueError('Shared customization moved since review')
-    incoming, revision, digest = materialize(args.name, entry, approved=False)
-    if revision != args.revision:
-        raise ValueError('Source moved since review')
-    shared_skill(args.name, entry)
-    if folder_state(catalog_folder(args.name)) != state:
-        raise ValueError('Skill changed during resolution; local edits preserved')
-    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(incoming))
-    if args.strategy == 'take-upstream':
-        store_catalog_skill(args.name, incoming, expected_state=state)
-        del entry['customization']
-    else:
-        entry['customization'].update(base_revision=revision, base_sha256=digest)
-    save_registry(data)
-    print(f'{args.name}: resolved ({args.strategy})')
-    return 0
-
-
-def register(args):
-    data = load_registry()
-    if args.name in data['skills']:
-        raise ValueError('Skill already registered; edit its entry explicitly')
-    source = (dict(kind='git', url=args.git_url, path=str(PurePosixPath(args.path)), ref=args.ref)
-              if args.git_url else dict(kind='url', url=args.url))
-    entry = dict(source=source, auto_update=args.auto_update == 'yes')
-    folder, revision, digest = materialize(args.name, entry, approved=False)
-    if catalog_folder(args.name).exists():
-        raise ValueError('Existing skill folder preserved; choose another name')
-    store_catalog_skill(args.name, folder)
-    entry.update(revision=revision, content_sha256=digest, executable_sha256=executable_hash(folder))
-    data['skills'][args.name] = entry
-    save_registry(data)
-    print('Registered:', args.name)
-    return 0
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--catalog', type=Path, required=True, help='Path to the skill catalog repository')
-    commands = parser.add_subparsers(dest='command', required=True)
-    checker = commands.add_parser('check', help='Check upstream versions; read-only by default')
-    checker.add_argument('--apply-auto', action='store_true')
-    checker.add_argument('--approve', action='append', default=[], metavar='NAME')
-    checker.add_argument('--expected-revision', help='Require this source revision for one manual approval')
-    checker.add_argument('--publish', action='store_true')
-    registration = commands.add_parser('register', help='Validate a source and pin its initial version')
-    registration.add_argument('name')
-    source = registration.add_mutually_exclusive_group(required=True)
-    source.add_argument('--git-url')
-    source.add_argument('--url', help='HTTPS URL of a single SKILL.md file')
-    registration.add_argument('--path', default='.')
-    registration.add_argument('--ref', default='refs/heads/main')
-    registration.add_argument('--auto-update', choices=('yes', 'no'), required=True)
-    args = parser.parse_args()
-    set_catalog(args.catalog)
-    try:
-        return {'check': check, 'register': register}[args.command](args)
-    except Exception as error:
-        print(f'ERROR: {error}', file=sys.stderr)
-        return 1
-
-
-if __name__ == '__main__':
-    sys.exit(main())

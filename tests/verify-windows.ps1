@@ -13,7 +13,7 @@ function Invoke-Installer($Mode) {
 }
 try {
     New-Item -ItemType Directory -Path (Join-Path $fixture 'scripts') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'client\scripts\sync-hidden.vbs') -Destination (Join-Path $fixture 'scripts')
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\sync-hidden.vbs') -Destination (Join-Path $fixture 'scripts')
     # The child measures its own console visibility, including paths with spaces.
     $probe = @'
 Add-Type -TypeDefinition @"
@@ -35,9 +35,9 @@ exit EXIT_CODE
         Remove-Item -LiteralPath (Join-Path $fixture 'visible.txt')
     }
     Write-Output 'PASS: hidden console and exit codes 0/7.'
-    $installer = Get-Content -LiteralPath (Join-Path $root 'client\install.ps1') -Raw
+    $installer = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
     $installer.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $taskName + '"')) | Set-Content -LiteralPath (Join-Path $fixture 'install.ps1') -Encoding UTF8
-    Copy-Item -LiteralPath (Join-Path $root 'client\scripts\client.ps1') -Destination (Join-Path $fixture 'scripts')
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\client.ps1') -Destination (Join-Path $fixture 'scripts')
     '{"version":2,"skills":{}}' | Set-Content -LiteralPath (Join-Path $fixture 'sources.json') -Encoding ASCII
     & git -C $fixture init -q
     Assert-True ($LASTEXITCODE -eq 0) 'Cannot initialize disposable repository.'

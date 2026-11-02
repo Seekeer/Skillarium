@@ -1,13 +1,13 @@
 {
   "files": {
-    ".gitattributes": "d0c473591f7bd0ee8c9544711743d88f33f5331eb209720b2fca4b07a6d6055f",
+    ".gitattributes": "33a26aeab410c1c325f572e28eb94da61d399d412ad4cfec2e8b101f767d6f4b",
     "README.md": "2cbe6a0e11d4a7c4a6301dcdd384c9382134ef5b247f4134db7f13058037ac2d",
-    "install.ps1": "a1884ebb517151bd94fb715fe28d4a52ae1c89b0d5aa178ca635bc8a521cc271",
-    "install.sh": "725891e218ecd91e0d753526d7370a32bf97ed197ab6baae12cfd7b506aecf13",
-    "scripts/client.ps1": "14f83d11d20a473940698d690c1250a4e25f8177ff4bda43670c670e20503811",
-    "scripts/client.sh": "2359ec85db44d80d336cc418e6501ee68114ef011dbf337ba4a19f86ccfd928c",
+    "install.ps1": "038a01c76925aab2fdb642ab822c8f55428331f12603f516ffa7863799f94d68",
+    "install.sh": "dff580dfb17071486672f055cf18b9ad2711af4532c926a98b4b298c3377eb03",
+    "scripts/client.ps1": "98e71d3cf365a62029d8e6a3b699822a73f944fef543e6555b9b46afda22c219",
+    "scripts/client.sh": "50d7aafdd8e686af06155ce62c67f1b2157de2eebcf139058e81c5183b183e5a",
     "scripts/sync-hidden.vbs": "3393e65cf531e90875784b71915a93494a8147ea3d9dd3fa8e5cc8bf326ee555"
   },
-  "generator": "agent-skills-updater/client",
+  "generator": "agent-skills/client",
   "version": 1
 }

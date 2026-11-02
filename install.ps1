@@ -1,6 +1,11 @@
 # Windows PowerShell 5.1+; installs junctions and a per-user hourly task.
 [CmdletBinding()]
-param([ValidateSet('Install', 'Sync', 'Link', 'Uninstall')][string]$Mode = 'Install')
+param(
+    [ValidateSet('Install', 'Sync', 'Link', 'Uninstall', 'Status', 'Updates', 'Review', 'Approve', 'Resolve')][string]$Mode = 'Install',
+    [string]$Skill,
+    [string]$Commit,
+    [ValidateSet('keep-ours', 'take-upstream', 'merged')][string]$Strategy
+)
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Use install.sh on Linux.'
@@ -43,6 +48,20 @@ try {
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
     . (Join-Path $repo 'scripts\client.ps1')
+    if ($Mode -in @('Review', 'Approve', 'Resolve') -and -not $Skill) { throw "-Skill is required for -Mode $Mode." }
+    if ($Mode -in @('Approve', 'Resolve') -and -not $Commit) { throw "-Commit is required for -Mode $Mode." }
+    if ($Mode -eq 'Resolve' -and -not $Strategy) { throw '-Strategy is required for -Mode Resolve.' }
+    switch ($Mode) {
+        'Status' { Show-Status; return }
+        'Updates' {
+            try { Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'fetch', '-q', '--prune', 'origin') | Out-Null }
+            catch { Write-Warning 'Offline: showing known proposals.' }
+            Show-Updates; return
+        }
+        'Review' { Show-Review -Name $Skill; return }
+        'Approve' { Approve-Update -Name $Skill -Commit $Commit; return }
+        'Resolve' { Resolve-Update -Name $Skill -Commit $Commit -Strategy $Strategy; return }
+    }
     if ($Mode -ne 'Link') {
         try { Sync-Repository }
         catch { Write-Warning $_.Exception.Message; $failed = $true }
