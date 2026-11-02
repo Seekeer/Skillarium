@@ -420,7 +420,7 @@ cmd_status() {
         rows+=("$(jq -cn --arg n "$name" --argjson g "$(global_json "$name")" --argjson l "$links" \
             '{name: $n, global: ($g + {links: $l}), projects: []}')")
     done <<<"$names"
-    printf '%s\n' "${projects[@]}" | jq -s --arg library "$repo" --arg file "$bindings_file" \
+    printf '%s\n' "${projects[@]}" | jq -cs --arg library "$repo" --arg file "$bindings_file" \
         --argjson skills "$(printf '%s\n' "${rows[@]}" | jq -cs 'map(select(. != null))')" '
         map(select(. != null)) as $projects
         | {library: $library, state: $file,
