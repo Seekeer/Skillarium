@@ -8,7 +8,6 @@ Fault injection reproduces lost responses, server errors and access errors.
 """
 import base64
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys

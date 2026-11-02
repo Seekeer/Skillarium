@@ -4,7 +4,6 @@ Requires Bash, jq, flock and curl (Linux); skipped elsewhere.
 """
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import unittest

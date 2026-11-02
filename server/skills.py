@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Source registration/checking on i3; clients use native shell scripts."""
-import argparse
 import hashlib
 import io
 import json
@@ -9,7 +8,6 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
 import urllib.parse

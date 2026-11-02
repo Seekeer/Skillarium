@@ -4,8 +4,8 @@
     "README.md": "ec8df3e329d3e89cd4ac5f0f4f55e499ab2b4f0e460ece084e9f27b89e7cc2dc",
     "install.ps1": "038a01c76925aab2fdb642ab822c8f55428331f12603f516ffa7863799f94d68",
     "install.sh": "e55779de7f8428edce9867b5ce3a438288e4e1ce854cf680aba8c82bef60af28",
-    "scripts/client.ps1": "98e71d3cf365a62029d8e6a3b699822a73f944fef543e6555b9b46afda22c219",
-    "scripts/client.sh": "023a658356652a560433ae4c5c85e852203023d8ddc8d44cf3e3c2c7837bfee5",
+    "scripts/client.ps1": "656533502a961f13c6dde9aa9777b8b2607df94c0d7f6353dab73ab16695aeec",
+    "scripts/client.sh": "a8b8133874ca746f11403877a3d18fc7b9d84fd22c32864a0d7cc97f5ea6f46e",
     "scripts/sync-hidden.vbs": "3393e65cf531e90875784b71915a93494a8147ea3d9dd3fa8e5cc8bf326ee555"
   },
   "generator": "agent-skills/client",

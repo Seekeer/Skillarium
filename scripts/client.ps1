@@ -547,6 +547,10 @@ function Get-Proposal {
     $shared = [string](& git -C $repo rev-parse -q --verify "refs/remotes/origin/${mainBranch}:skills/$Name" 2>$null)
     if (-not $shared) { $shared = 'none' }
     if ($shared -ne (Get-Trailer $message 'Shared-Tree')) { throw 'Shared skill changed since the proposal; the server will prepare a new one.' }
+    $registry = (Invoke-Git -GitArgs @('show', "refs/remotes/origin/${mainBranch}:sources.json")) -join "`n" | ConvertFrom-Json
+    $policy = 'confirm'
+    if ($registry.skills.$Name.auto_update) { $policy = 'auto' }
+    if ($policy -ne (Get-Trailer $message 'Policy')) { throw 'Update policy changed since the proposal; the server will prepare a new one.' }
     return [PSCustomObject]@{ Branch = $refs[0].Substring('refs/remotes/origin/'.Length); Message = $message }
 }
 

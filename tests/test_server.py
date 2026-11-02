@@ -3,7 +3,6 @@
 Runs on Linux and Windows: only Git, Python and the fake hosting are used.
 """
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -147,7 +146,7 @@ class ServerTests(unittest.TestCase):
 
     def test_overlapping_edits_become_conflict_with_materials_and_preserve_installation(self):
         lib = self.lib
-        work = self.edit_shared('SKILL.md', b'---\nname: first-skill\ndescription: Test skill\n---\nour line\n')
+        self.edit_shared('SKILL.md', b'---\nname: first-skill\ndescription: Test skill\n---\nour line\n')
         self.update_upstream('their line')
         output = lib.manage('maintain', '--apply-auto', expected=1)
         self.assertIn('upstream-conflict', output)
@@ -201,7 +200,7 @@ class ServerTests(unittest.TestCase):
 
     def test_upstream_removal_or_outage_keeps_installed_skill_and_detach_works_offline(self):
         lib = self.lib
-        work = self.edit_shared('SKILL.md', b'---\nname: first-skill\ndescription: Test skill\n---\nours\n')
+        self.edit_shared('SKILL.md', b'---\nname: first-skill\ndescription: Test skill\n---\nours\n')
         lib.manage('maintain', '--apply-auto')
         lib.git(lib.upstream, 'rm', '-rq', 'skills/first-skill')
         lib.git(lib.upstream, 'commit', '-q', '-m', 'Remove skill')

@@ -15,7 +15,6 @@ import sys
 import tempfile
 
 import absorb_updater
-import hosting
 import maintenance
 import skills
 

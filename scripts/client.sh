@@ -515,7 +515,7 @@ accept_proposal() {
 }
 
 proposal_for() {
-    local name=$1 commit=$2 found shared
+    local name=$1 commit=$2 found shared policy
     git -C "$repo" -c credential.interactive=false fetch -q --prune origin || return 1
     found=$(find_proposal "$name") || return 1
     [[ "${found#* }" == "$commit" ]] || { echo 'Proposal changed since review; review it again.' >&2; return 1; }
@@ -524,6 +524,11 @@ proposal_for() {
     shared=$(git -C "$repo" rev-parse -q --verify "refs/remotes/origin/$main_branch:skills/$name") || shared=none
     [[ "$shared" == "$(trailer "$proposal_message" Shared-Tree)" ]] || {
         echo 'Shared skill changed since the proposal; the server will prepare a new one.' >&2; return 1;
+    }
+    policy=$(git -C "$repo" show "refs/remotes/origin/$main_branch:sources.json" |
+        jq -r --arg name "$name" 'if .skills[$name].auto_update then "auto" else "confirm" end') || return 1
+    [[ "$policy" == "$(trailer "$proposal_message" Policy)" ]] || {
+        echo 'Update policy changed since the proposal; the server will prepare a new one.' >&2; return 1;
     }
 }
 
