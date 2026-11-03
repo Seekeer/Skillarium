@@ -13,4 +13,4 @@ jobs:
       - name: Project bindings with real symlinks
         run: |
           command -v jq flock git
-          python3 -m unittest tests/test_project_bindings.py -v
+          python3 -m unittest discover -s tests -p 'test_project_bindings.py' -v

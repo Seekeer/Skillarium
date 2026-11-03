@@ -11,7 +11,8 @@ const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repo = path.resolve(appDir, '..');
 const windows = process.platform === 'win32';
 const CLIENT_FILES = ['install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', '.gitattributes',
-  'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1'];
+  'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
+  'scripts/sync-hidden.vbs', 'agent-skills.json'];
 const SHARED = 'shared-skill';
 const OTHER = 'other-skill';
 
@@ -215,10 +216,13 @@ test('shows a stopped synchronization and resolves the conflict with an edited v
   await expect(dialog.getByRole('button', { name: 'Различие 1: правка вручную' })).toBeVisible();
   await page.keyboard.press('Control+Enter');
 
-  await expect(page.getByRole('alert')).toContainText('итог опубликован в общей библиотеке');
+  // This fixture has no hosting API, so the merge stays local until the next synchronization
+  // publishes it through a proposal pull request (covered by the Python tests).
+  await expect(page.getByRole('alert')).toContainText('Конфликт разрешён и сохранён здесь');
   await expect(banner).toBeHidden();
   expect(fs.readFileSync(skillFile(fixture.library), 'utf8')).toBe(text('Моя правка и правка коллеги'));
-  expect(git(fixture.library, fixture.env, 'rev-parse', 'HEAD')).toBe(git(fixture.library, fixture.env, 'rev-parse', 'origin/main'));
+  const parents = git(fixture.library, fixture.env, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ');
+  expect(parents.slice(1)).toContain(git(fixture.library, fixture.env, 'rev-parse', 'origin/main'));
   expect(git(fixture.library, fixture.env, 'status', '--porcelain')).toBe('');
 });
 

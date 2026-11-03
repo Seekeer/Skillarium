@@ -14,12 +14,15 @@ import tempfile
 import time
 import unittest
 
+from fake_hosting import FakeHosting, protect
+
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == 'nt'
 CLIENT = 'powershell' if WINDOWS else 'bash'
 PWSH = os.environ.get('AGENT_SKILLS_PWSH') or 'powershell.exe'
 CLIENT_FILES = ['install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', '.gitattributes',
-                'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1']
+                'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
+                'scripts/sync-hidden.vbs', 'agent-skills.json']
 AGENTS = ['.agents', '.claude']
 SHARED, OTHER = 'shared-skill', 'other-skill'
 
@@ -217,6 +220,27 @@ class ProjectBindingTests(unittest.TestCase):
         self.assertNotIn('own-skill', (self.library / 'sources.json').read_text())
         self.assertNotIn('own-skill', json.dumps(self.status()))
         self.assertEqual(self.git(project, 'status', '--porcelain'), '')
+
+    def test_unregistered_client_skill_can_be_bound_and_keeps_global_choice(self):
+        name = 'client-local'
+        folder = self.library / 'skills' / name
+        folder.mkdir()
+        (folder / 'SKILL.md').write_text(
+            f'---\nname: {name}\ndescription: Local client skill\n---\nLocal\n')
+        self.background()
+        self.assert_global(True, name)
+        self.assertEqual(self.skill_status(name)['name'], name)
+        project = self.make_project('local skill project')
+        self.projects('register', project)
+        self.projects('bind', project, name)
+        self.assert_project_bound(project, name)
+        self.assert_global(False, name)
+        self.background()
+        self.assert_project_bound(project, name)
+        self.assert_global(False, name)
+        self.projects('unbind', project, name, 'global')
+        self.assert_project_unbound(project, name)
+        self.assert_global(True, name)
 
     # 2 -----------------------------------------------------------------------
     def test_first_binding_moves_global_links_to_selected_projects(self):
@@ -477,6 +501,13 @@ class ProjectBindingTests(unittest.TestCase):
         self.projects('bind', project, SHARED)
         self.projects('global', OTHER, 'off')
         (self.project_link(project, '.agents') / 'notes.md').write_text('shared edit\n', newline='\n')
+        protect(self.remote)
+        host = FakeHosting(self.remote, self.env)
+        self.addCleanup(host.stop)
+        self.git(self.library, 'config', 'agent-skills.machine', 'bindings-test')
+        self.git(self.library, 'config', 'agent-skills.api', host.api)
+        self.git(self.library, 'config', 'credential.helper',
+                 '!f() { echo username=test; echo password=secret; }; f')
         self.publish()
         checkout = self.root / 'published'
         self.git(self.root, 'clone', str(self.remote), str(checkout))
@@ -515,6 +546,16 @@ class ProjectBindingTests(unittest.TestCase):
         (local / 'notes.md').write_text('local notes\n', newline='\n')
         self.publish(expected=1)
 
+    def hosting(self):
+        protect(self.remote)
+        host = FakeHosting(self.remote, self.env)
+        self.addCleanup(host.stop)
+        self.git(self.library, 'config', 'agent-skills.machine', 'bindings-test')
+        self.git(self.library, 'config', 'agent-skills.api', host.api)
+        self.git(self.library, 'config', 'credential.helper',
+                 '!f() { echo username=test; echo password=secret; }; f')
+        return host
+
     def conflicts(self):
         self.projects('conflicts')
         return self.json_output()
@@ -530,6 +571,7 @@ class ProjectBindingTests(unittest.TestCase):
     def test_sync_conflict_is_listed_and_resolved_without_losing_either_side(self):
         self.assertEqual(self.conflicts(), {'state': 'ok', 'upstream': None, 'files': []})
         self.conflicting_edits()
+        self.hosting()
         # Users may have no Git identity; the trial merge must not need one.
         for key in ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']:
             self.env.pop(key)
@@ -560,20 +602,31 @@ class ProjectBindingTests(unittest.TestCase):
         report = self.conflicts()
         files = {item['path']: item for item in report['files']}
         self.assertIn('Ещё строка', files[skill_md]['mine']['text'])
+        edited = f'---\nname: {SHARED}\ndescription: Test\n---\nОбщая версия\n'
         request = {'upstream': report['upstream'], 'files': [
-            {'path': skill_md, 'take': 'edited', 'text': 'Общая версия\n',
+            {'path': skill_md, 'take': 'edited', 'text': 'Общая версия без заголовка\n',
              'mine': files[skill_md]['mine']['id'], 'library': files[skill_md]['library']['id']},
             {'path': notes, 'take': 'library', 'mine': files[notes]['mine']['id'], 'library': None}]}
-        self.resolve(request)
-        self.assertEqual(self.json_output(), {'resolved': True, 'pushed': True})
-        self.assertEqual((local / 'SKILL.md').read_bytes(), 'Общая версия\n'.encode())
+        # A result that is no longer a valid skill is refused before anything is merged.
+        head = self.git(self.library, 'rev-parse', 'HEAD')
+        self.assertIn('needs frontmatter', self.resolve(request, expected=1))
+        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(self.worktrees(), 1)
+        request['files'][0]['text'] = edited
+        output = self.resolve(request)
+        # The resolution travels like any client edit: a proposal pull request merged by the hosting.
+        self.assertEqual(self.json_output(), {'resolved': True, 'published': True}, output)
+        self.assertEqual((local / 'SKILL.md').read_bytes(), edited.encode())
         self.assertFalse((local / 'notes.md').exists())
         self.assertEqual(self.conflicts()['state'], 'ok')
         self.assertEqual(self.git(self.library, 'status', '--porcelain'), '')
-        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), self.git(self.library, 'rev-parse', '@{upstream}'))
         self.assertEqual(len(self.git(self.library, 'rev-list', '--parents', '-n', '1', 'HEAD').split()), 3)
         self.assertEqual(self.worktrees(), 1)
+        published = subprocess.run(['git', '-C', str(self.remote), 'show', f'main:{skill_md}'], env=self.env,
+                                   capture_output=True, check=True).stdout
+        self.assertEqual(published, edited.encode())
         self.publish()
+        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), self.git(self.library, 'rev-parse', '@{upstream}'))
         self.assert_global(True)
 
 

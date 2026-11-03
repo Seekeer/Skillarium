@@ -1,0 +1,39 @@
+name: Skill library and native clients
+
+on:
+  push:
+    branches-ignore: ['agent-skills/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Server, policy, migration and Linux client integration tests
+        run: |
+          command -v git jq curl flock
+          git --version
+          python3 server/manage.py client-manifest
+          python3 -m unittest discover -s tests -v
+
+  windows:
+    # Gitea does not provide hosted Windows VMs. Register a disposable native
+    # Windows runner with the label windows-latest:host (see tests/README.md).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Server, policy and PowerShell client with real junctions
+        shell: powershell
+        run: |
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows PowerShell 5.1 installation and native junctions
+        shell: powershell
+        run: ./tests/windows_native.ps1
+      - name: Hidden console and actual scheduled execution
+        shell: powershell
+        run: ./tests/verify-windows.ps1

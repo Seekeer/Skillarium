@@ -76,7 +76,6 @@ function Get-GlobalChoice {
 function Test-LibrarySkill {
     param([string]$Name, [switch]$Quiet)
     try {
-        if (-not (Get-Registry).skills.PSObject.Properties[$Name]) { throw "Skill is not in the library: $Name" }
         Assert-CatalogSkill -Name $Name
         return $true
     } catch {
@@ -355,8 +354,8 @@ function Sync-Bindings {
             $script:state.global[$name].pending = $null
         }
     }
-    foreach ($property in (Get-Registry).skills.PSObject.Properties) {
-        if (-not (Set-GlobalLinks $property.Name)) { $ok = $false }
+    foreach ($name in Get-LibraryNames) {
+        if (-not (Set-GlobalLinks $name)) { $ok = $false }
     }
     if (-not (Remove-UnusedExcludes)) { $ok = $false }
     Save-Bindings
@@ -521,8 +520,7 @@ function Invoke-Status {
         $projects += [ordered]@{path = $project; available = $available; error = $errorValue; skills = $skills}
     }
     $rows = @()
-    foreach ($property in (Get-Registry).skills.PSObject.Properties) {
-        $name = $property.Name
+    foreach ($name in Get-LibraryNames) {
         $choice = Get-GlobalChoice $name
         $links = [ordered]@{}
         foreach ($agent in $agentFolders) {

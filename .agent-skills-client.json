@@ -1,13 +1,17 @@
 {
   "files": {
-    ".gitattributes": "d0c473591f7bd0ee8c9544711743d88f33f5331eb209720b2fca4b07a6d6055f",
-    "README.md": "2cbe6a0e11d4a7c4a6301dcdd384c9382134ef5b247f4134db7f13058037ac2d",
-    "install.ps1": "a1884ebb517151bd94fb715fe28d4a52ae1c89b0d5aa178ca635bc8a521cc271",
-    "install.sh": "725891e218ecd91e0d753526d7370a32bf97ed197ab6baae12cfd7b506aecf13",
-    "scripts/client.ps1": "14f83d11d20a473940698d690c1250a4e25f8177ff4bda43670c670e20503811",
-    "scripts/client.sh": "2359ec85db44d80d336cc418e6501ee68114ef011dbf337ba4a19f86ccfd928c",
+    ".gitattributes": "33a26aeab410c1c325f572e28eb94da61d399d412ad4cfec2e8b101f767d6f4b",
+    "README.md": "233b26b1c53577995c1a2fe3a0232565b7a6f0bedc6b8b520b3a9e115f08ca0d",
+    "install.ps1": "93d99f0c56e2b3756b2a2b64fb4454b95516ff9725656068c400585665c0de5f",
+    "install.sh": "ba5949d20adc7aab32e7ae497d50f256514e7346cdbf61796e6118787dc96673",
+    "projects.ps1": "404fb11ad04edaeb09f926ca9dade628f6fd3d97cefd2a4496a92ebb2c6f2cfc",
+    "projects.sh": "246e2407d653ca92d0c1e52066abfe389755d40c642644af2e346a1cb9cc504f",
+    "scripts/bindings.ps1": "ecc1daf95a275a6edbaa393251d11f9166353b898083123b0719f3f19d45839a",
+    "scripts/bindings.sh": "93c8faec0541da0c9780620efe6afb8b20a6b158ba3453e9fd417d11e3b1f98a",
+    "scripts/client.ps1": "c8bbaa0e2f02f8e26d021050b67f2b653236f8101e2bf2dce8eb7a571de86cf2",
+    "scripts/client.sh": "8e9e4fc22b9d8c929cc55d66782ba56aa711443bf86824a800348f7b7d58a46f",
     "scripts/sync-hidden.vbs": "3393e65cf531e90875784b71915a93494a8147ea3d9dd3fa8e5cc8bf326ee555"
   },
-  "generator": "agent-skills-updater/client",
+  "generator": "agent-skills/client",
   "version": 1
 }
