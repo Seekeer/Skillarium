@@ -9,20 +9,22 @@ Usage: bash projects.sh status
        bash projects.sh bind <folder> <skill>
        bash projects.sh unbind <folder> <skill> [global|library]
        bash projects.sh global <skill> on|off
+       bash projects.sh conflicts | resolve <request.json>
 Exit codes: 3 the last binding needs a global-access choice (JSON on stdout);
-            4 the binding is saved but not applied (see status).
+            4 the binding is saved but not applied (see status);
+            5 the synchronization conflict changed; nothing was merged.
 EOF
 }
 command=${1:-}
 case "$command:$#" in
-    status:1|register:2|unregister:2|global:3|bind:3|unbind:3|unbind:4) shift ;;
+    status:1|conflicts:1|resolve:2|register:2|unregister:2|global:3|bind:3|unbind:3|unbind:4) shift ;;
     help:1|--help:1|-h:1) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
 esac
 
 source "$repo/scripts/client.sh"
 source "$repo/scripts/bindings.sh"
-if [[ "$command" != status ]]; then
+if [[ "$command" != status && "$command" != conflicts ]]; then
     # The background client uses the same lock; wait for it instead of skipping.
     lock_path=$(git -C "$repo" rev-parse --git-path agent-skills-sync.lock)
     [[ "$lock_path" = /* ]] || lock_path="$repo/$lock_path"

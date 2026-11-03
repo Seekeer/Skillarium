@@ -80,7 +80,7 @@ function makeFixture() {
     git(folder, env, 'commit', '-m', 'Initial project');
     return folder;
   };
-  return { root, home, env, library, alpha: project('project alpha'), beta: project('project beta') };
+  return { root, home, env, seed, library, alpha: project('project alpha'), beta: project('project beta') };
 }
 
 function linksTo(link, target) {
@@ -167,6 +167,47 @@ test('connects a skill, asks on the last disconnect and shows global access sepa
   await sharedGlobal.click();
   await expect(sharedGlobal).toHaveAttribute('aria-checked', 'true');
   expect(linksTo(path.join(fixture.home, '.agents', 'skills', SHARED), librarySkill)).toBe(true);
+});
+
+test('shows a stopped synchronization and resolves the conflict with an edited version', async () => {
+  const skillFile = (folder) => path.join(folder, 'skills', SHARED, 'SKILL.md');
+  const text = (body) => `---\nname: ${SHARED}\ndescription: Test\n---\n${body}\n`;
+  // The state the background synchronization leaves: an automatic local commit and a diverged origin.
+  fs.writeFileSync(skillFile(fixture.seed), text('Правка коллеги'));
+  git(fixture.seed, fixture.env, 'commit', '-am', 'Teammate edit');
+  git(fixture.seed, fixture.env, 'push');
+  fs.writeFileSync(skillFile(fixture.library), text('Моя правка'));
+  git(fixture.library, fixture.env, 'commit', '-am', 'Share local skill edits\n\nAgent-Skills-Client: 1');
+  git(fixture.library, fixture.env, 'fetch', 'origin');
+
+  session = await launch(fixture);
+  const { page } = session;
+  const banner = page.getByRole('region', { name: 'Синхронизация библиотеки' });
+  await expect(banner).toContainText('Синхронизация библиотеки остановлена');
+  await expect(banner).toContainText(`«${SHARED}»`);
+
+  await banner.getByRole('button', { name: 'Разобрать конфликт' }).click();
+  let dialog = page.getByRole('dialog', { name: 'Разбор конфликта синхронизации' });
+  await expect(dialog.getByRole('region', { name: 'На этом компьютере' })).toContainText('Моя правка');
+  await expect(dialog.getByRole('region', { name: 'В общей библиотеке' })).toContainText('Правка коллеги');
+  await expect(dialog.getByRole('button', { name: 'Применить' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Отмена' }).click();
+  await expect(dialog).toBeHidden();
+  expect(fs.readFileSync(skillFile(fixture.library), 'utf8')).toBe(text('Моя правка'));
+
+  await banner.getByRole('button', { name: 'Разобрать конфликт' }).click();
+  dialog = page.getByRole('dialog', { name: 'Разбор конфликта синхронизации' });
+  await dialog.getByRole('radio', { name: 'Свой вариант' }).check();
+  const merged = dialog.getByRole('textbox', { name: `Итоговый текст skills/${SHARED}/SKILL.md` });
+  await expect(merged).toHaveValue(text('Моя правка'));
+  await merged.fill(text('Моя правка и правка коллеги'));
+  await dialog.getByRole('button', { name: 'Применить' }).click();
+
+  await expect(page.getByRole('alert')).toContainText('итог опубликован в общей библиотеке');
+  await expect(banner).toBeHidden();
+  expect(fs.readFileSync(skillFile(fixture.library), 'utf8')).toBe(text('Моя правка и правка коллеги'));
+  expect(git(fixture.library, fixture.env, 'rev-parse', 'HEAD')).toBe(git(fixture.library, fixture.env, 'rev-parse', 'origin/main'));
+  expect(git(fixture.library, fixture.env, 'status', '--porcelain')).toBe('');
 });
 
 test('explains unapplied connections and unavailable projects', async () => {

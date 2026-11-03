@@ -42,6 +42,37 @@ export function globalCaption(global) {
   return global.enabled ? 'По умолчанию' : 'Выключено первым подключением';
 }
 
+export function lines(text) {
+  if (text === null || text === undefined) return [];
+  const list = text.split('\n');
+  if (list.length > 1 && list[list.length - 1] === '') list.pop();
+  return list;
+}
+
+// Marks the lines of each version that are not in their longest common subsequence.
+export function changedLines(left, right) {
+  const a = lines(left);
+  const b = lines(right);
+  if (a.length * b.length > 4_000_000) return { left: a.map(() => true), right: b.map(() => true) };
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const changed = { left: a.map(() => true), right: b.map(() => true) };
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    if (a[i] === b[j]) { changed.left[i] = false; changed.right[j] = false; i += 1; j += 1; }
+    else if (table[i + 1][j] >= table[i][j + 1]) i += 1;
+    else j += 1;
+  }
+  return changed;
+}
+
+export function conflictSkills(sync) {
+  return [...new Set((sync?.files || []).map((file) => file.skill))];
+}
+
 function conflictPaths(links) {
   return Object.entries(links || {}).filter(([, state]) => state === 'conflict').map(([path]) => path);
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CELL_TEXT, basename, buildMatrix, cellOf, globalCaption, parent, problems } from './model.js';
+import { CELL_TEXT, basename, buildMatrix, cellOf, changedLines, conflictSkills, globalCaption, lines, parent, problems } from './model.js';
 
 const api = window.skills;
 
@@ -47,6 +47,128 @@ function Socket({ row, project, entry, busy, onToggle }) {
   );
 }
 
+function Version({ title, side, changed }) {
+  let body;
+  if (!side) body = <p className="version-note">Файл удалён</p>;
+  else if (side.binary) body = <p className="version-note">Двоичный файл, показать нельзя</p>;
+  else {
+    body = (
+      <pre className="version-text">
+        {lines(side.text).map((line, index) => (
+          <span key={index} className={changed[index] ? 'line changed' : 'line'}>{line || ' '}</span>
+        ))}
+      </pre>
+    );
+  }
+  return (
+    <section className="version" aria-label={title}>
+      <h4>{title}</h4>
+      {body}
+    </section>
+  );
+}
+
+function ConflictFile({ file, choice, onChoose }) {
+  const diff = changedLines(file.mine?.text, file.library?.text);
+  const editable = !(file.mine?.binary || file.library?.binary);
+  const option = (take, label) => (
+    <label className={`take${choice?.take === take ? ' picked' : ''}`}>
+      <input type="radio" name={file.path} checked={choice?.take === take}
+        onChange={() => onChoose({ take, text: take === 'edited' ? (choice?.text ?? file.mine?.text ?? file.library?.text ?? '') : undefined })} />
+      {label}
+    </label>
+  );
+  return (
+    <li className="conflict-file">
+      <h3><code>{file.path.slice(`skills/${file.skill}/`.length)}</code></h3>
+      <div className="versions">
+        <Version title="На этом компьютере" side={file.mine} changed={diff.left} />
+        <Version title="В общей библиотеке" side={file.library} changed={diff.right} />
+      </div>
+      <div className="takes" role="radiogroup" aria-label={`Итог для ${file.path}`}>
+        {option('mine', file.mine ? 'Оставить мою версию' : 'Удалить, как у меня')}
+        {option('library', file.library ? 'Взять версию библиотеки' : 'Удалить, как в библиотеке')}
+        {editable && option('edited', 'Свой вариант')}
+      </div>
+      {choice?.take === 'edited' && (
+        <textarea className="merged" aria-label={`Итоговый текст ${file.path}`} spellCheck={false}
+          rows={Math.min(18, Math.max(6, lines(choice.text).length + 1))}
+          value={choice.text} onChange={(event) => onChoose({ take: 'edited', text: event.target.value })} />
+      )}
+    </li>
+  );
+}
+
+function Resolver({ sync, onCancel, onApply }) {
+  const [choices, setChoices] = useState({});
+  const box = useRef(null);
+  useEffect(() => {
+    box.current?.focus();
+    const onKey = (event) => { if (event.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+  const files = sync.files;
+  const ready = files.every((file) => choices[file.path]);
+  const apply = () => onApply({
+    upstream: sync.upstream,
+    files: files.map((file) => ({ path: file.path, mine: file.mine?.id ?? null, library: file.library?.id ?? null, ...choices[file.path] })),
+  });
+  return (
+    <div className="backdrop">
+      <div className="resolver" role="dialog" aria-modal="true" aria-labelledby="resolver-title" tabIndex={-1} ref={box}>
+        <header>
+          <h2 id="resolver-title">Разбор конфликта синхронизации</h2>
+          <p>Эти файлы изменили и здесь, и в общей библиотеке. Выберите итог для каждого: он заменит обе версии
+            здесь и в библиотеке. До нажатия «Применить» ничего не меняется.</p>
+        </header>
+        <div className="resolver-body">
+          {conflictSkills(sync).map((name) => (
+            <section key={name} aria-label={`Скилл ${name}`}>
+              <h3 className="resolver-skill">{name}</h3>
+              <ul>
+                {files.filter((file) => file.skill === name).map((file) => (
+                  <ConflictFile key={file.path} file={file} choice={choices[file.path]}
+                    onChoose={(choice) => setChoices((old) => ({ ...old, [file.path]: choice }))} />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <footer className="modal-actions">
+          <span className="progress">Выбрано {files.filter((file) => choices[file.path]).length} из {files.length}</span>
+          <button type="button" className="quiet" onClick={onCancel}>Отмена</button>
+          <button type="button" className="primary" disabled={!ready} onClick={apply}>Применить</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function SyncBanner({ sync, busy, onOpen }) {
+  if (sync?.state === 'error') {
+    return (
+      <div className="sync-banner" role="region" aria-label="Синхронизация библиотеки">
+        <p><strong>Не удалось проверить синхронизацию библиотеки.</strong></p>
+        {sync.messages?.length > 0 && <pre>{sync.messages.join('\n')}</pre>}
+      </div>
+    );
+  }
+  if (sync?.state !== 'conflict') return null;
+  const names = conflictSkills(sync).map((name) => `«${name}»`).join(', ');
+  return (
+    <div className="sync-banner" role="region" aria-label="Синхронизация библиотеки">
+      <div>
+        <p><strong>Синхронизация библиотеки остановлена.</strong> Правки {names} на этом компьютере расходятся
+          с общей библиотекой.</p>
+        <p className="sub">Обе версии сохранены. Пока вы не выберете итог, обновления скиллов не приходят,
+          а ваши правки не публикуются.</p>
+      </div>
+      <button type="button" className="primary" disabled={busy} onClick={onOpen}>Разобрать конфликт</button>
+    </div>
+  );
+}
+
 function Setup({ library, onChoose }) {
   return (
     <main className="setup">
@@ -64,11 +186,15 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [decision, setDecision] = useState(null);
   const [removing, setRemoving] = useState(null);
+  const [sync, setSync] = useState(null);
+  const [resolving, setResolving] = useState(null);
 
   const refresh = useCallback(async () => {
-    const result = await api.status();
+    const [result, conflicts] = await Promise.all([api.status(), api.conflicts()]);
     if (result.code === 0 && result.json) setStatus(result.json);
     else setNotice({ tone: 'error', text: 'Не удалось прочитать состояние подключений.', details: result.messages });
+    if (conflicts.code === 0 && conflicts.json) setSync(conflicts.json);
+    else setSync({ state: 'error', messages: conflicts.messages });
   }, []);
 
   useEffect(() => { api.library().then(setLibrary); }, []);
@@ -118,6 +244,18 @@ export default function App() {
   const toggleGlobal = (row) => act(`global|${row.name}`, () => api.setGlobal(row.name, !row.global.enabled), (result) => report(result));
   const register = () => act('register', () => api.register(),
     (result) => report(result, 'Проект добавлен, но часть скиллов из его списка не подключена. Подробности ниже.'));
+  const resolve = (request) => {
+    setResolving(null);
+    act('resolve', () => api.resolve(request), (result) => {
+      if (result.code === 0) {
+        setNotice({ tone: 'info', text: result.json?.pushed
+          ? 'Конфликт разрешён, итог опубликован в общей библиотеке. Синхронизация снова работает.'
+          : 'Конфликт разрешён и сохранён здесь. В библиотеку итог отправится при следующей синхронизации.' });
+      } else if (result.code === 5) {
+        setNotice({ tone: 'warn', text: 'Пока вы выбирали, версии изменились. Ничего не применено; разберите конфликт заново.' });
+      } else report(result);
+    });
+  };
 
   if (!library) return null;
   if (!library.valid) return <Setup library={library} onChoose={chooseLibrary} />;
@@ -142,6 +280,8 @@ export default function App() {
           <button type="button" className="primary" onClick={register} disabled={Boolean(busy)}>Добавить проект</button>
         </div>
       </header>
+
+      <SyncBanner sync={sync} busy={Boolean(busy)} onOpen={() => setResolving(sync)} />
 
       {notice && (
         <div className={`notice ${notice.tone}`} role="alert">
@@ -252,6 +392,8 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {resolving && <Resolver sync={resolving} onCancel={() => setResolving(null)} onApply={resolve} />}
 
       {removingProject && (
         <Modal title={`Убрать проект «${basename(removingProject.path)}»?`} onCancel={() => setRemoving(null)}>

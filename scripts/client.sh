@@ -215,3 +215,135 @@ link_version() {
     done
     return "$errors"
 }
+
+# Conflicts that stop reconcile_repository, shown and resolved by the "Projects" UI.
+diverged_revisions() {
+    local head upstream
+    git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 0
+    git -C "$repo" symbolic-ref -q HEAD >/dev/null || return 0
+    upstream=$(git -C "$repo" rev-parse --verify --quiet '@{upstream}') || return 0
+    head=$(git -C "$repo" rev-parse HEAD) || return 1
+    if git -C "$repo" merge-base --is-ancestor "$upstream" "$head" ||
+        git -C "$repo" merge-base --is-ancestor "$head" "$upstream"; then return 0; fi
+    printf '%s %s\n' "$head" "$upstream"
+}
+
+# Repeats the background merge in a disposable worktree, fills conflict_paths and runs "$@" <worktree>.
+trial_merge() {
+    local head=$1 upstream=$2 temporary path merged=true result=0
+    shift 2
+    temporary=$(mktemp -d "$(git -C "$repo" rev-parse --absolute-git-dir)/client-merge-XXXXXX") || return 1
+    if ! git -C "$repo" worktree add --quiet --detach "$temporary" "$head"; then rmdir "$temporary"; return 1; fi
+    conflict_paths=()
+    git -C "$temporary" -c user.name=agent-skills -c user.email=agent-skills@localhost -c core.hooksPath=/dev/null merge --quiet --no-commit --no-ff "$upstream" >/dev/null 2>&1 || merged=false
+    while IFS= read -r -d '' path; do conflict_paths+=("$path"); done < <(git -C "$temporary" diff --name-only -z --diff-filter=U)
+    if [[ "$merged" == false && ${#conflict_paths[@]} -eq 0 ]]; then
+        echo 'Trial merge failed without conflicts.' >&2; result=1
+    else
+        "$@" "$temporary" || result=$?
+    fi
+    git -C "$repo" worktree remove --force "$temporary" || return 1
+    return "$result"
+}
+
+conflict_side() {
+    local file=$1 id=$2
+    if [[ $(tr -d '\000' < "$file" | wc -c) -eq $(wc -c < "$file") ]] && iconv -f UTF-8 -t UTF-8 "$file" >/dev/null 2>&1; then
+        jq -cn --arg id "$id" --rawfile text "$file" '{id: $id, binary: false, text: $text}'
+    else
+        jq -cn --arg id "$id" '{id: $id, binary: true, text: null}'
+    fi
+}
+
+# The local side is the working tree: the next synchronization commits it first.
+cmd_conflicts() {
+    local revisions head upstream path skill id mine library blob result=0
+    local -a files=()
+    revisions=$(diverged_revisions) || return 1
+    if [[ -z "$revisions" ]]; then jq -cn '{state: "ok", upstream: null, files: []}'; return 0; fi
+    read -r head upstream <<<"$revisions"
+    trial_merge "$head" "$upstream" true || return 1
+    blob=$(mktemp) || return 1
+    for path in "${conflict_paths[@]}"; do
+        if [[ ! "$path" =~ ^skills/([a-z0-9]+(-[a-z0-9]+)*)/ ]]; then
+            echo "Conflict outside skills/ needs manual Git resolution: $path" >&2; result=1; break
+        fi
+        skill=${BASH_REMATCH[1]}
+        mine=null library=null
+        if [[ -f "$repo/$path" && ! -L "$repo/$path" ]]; then
+            if ! id=$(git -C "$repo" hash-object --no-filters -- "$path") || ! mine=$(conflict_side "$repo/$path" "$id"); then result=1; break; fi
+        fi
+        if id=$(git -C "$repo" rev-parse --verify --quiet "$upstream:$path"); then
+            if ! git -C "$repo" cat-file blob "$id" > "$blob" || ! library=$(conflict_side "$blob" "$id"); then result=1; break; fi
+        fi
+        files+=("$(jq -cn --arg p "$path" --arg s "$skill" --argjson m "$mine" --argjson l "$library" \
+            '{path: $p, skill: $s, mine: $m, library: $l}')")
+    done
+    rm -f -- "$blob"
+    ((result == 0)) || return "$result"
+    printf '%s\n' "${files[@]}" | jq -cs --arg u "$upstream" \
+        'map(select(. != null)) | {state: (if length > 0 then "conflict" else "ok" end), upstream: $u, files: .}'
+}
+
+# Runs inside trial_merge; returns 5 when the shown conflict no longer matches.
+apply_choices() {
+    local worktree=$1 path entry take mine_id library_id target source
+    [[ "$(printf '%s\n' "${conflict_paths[@]}" | LC_ALL=C sort)" == "$(jq -r '.files[].path' "$resolve_request" | LC_ALL=C sort)" ]] || return 5
+    for path in "${conflict_paths[@]}"; do
+        entry=$(jq -c --arg p "$path" '[.files[] | select(.path == $p)][0]' "$resolve_request") || return 1
+        mine_id=$(git -C "$repo" rev-parse --verify --quiet "$resolve_head:$path") || mine_id=''
+        library_id=$(git -C "$repo" rev-parse --verify --quiet "$resolve_upstream:$path") || library_id=''
+        [[ "$(jq -r '.mine // ""' <<<"$entry")" == "$mine_id" && "$(jq -r '.library // ""' <<<"$entry")" == "$library_id" ]] || return 5
+        target="$worktree/$path"
+        rm -f -- "$target"
+        take=$(jq -r '.take' <<<"$entry")
+        case "$take" in
+            mine|library)
+                source=$mine_id
+                [[ "$take" == mine ]] || source=$library_id
+                if [[ -n "$source" ]]; then
+                    mkdir -p -- "${target%/*}" || return 1
+                    git -C "$repo" cat-file blob "$source" > "$target" || return 1
+                fi ;;
+            edited)
+                jq -e '.text | type == "string"' <<<"$entry" >/dev/null || { echo "No edited text: $path" >&2; return 1; }
+                mkdir -p -- "${target%/*}" || return 1
+                jq -j '.text' <<<"$entry" > "$target" || return 1 ;;
+            *) echo "Unknown choice for $path." >&2; return 1 ;;
+        esac
+        git -C "$worktree" add -A -- ":(literal)$path" || return 1
+    done
+    [[ -z $(git -C "$worktree" diff --name-only --diff-filter=U) ]] || { echo 'Unresolved files remain; nothing merged.' >&2; return 1; }
+    git -C "$worktree" -c user.name=agent-skills -c user.email=agent-skills@localhost -c core.hooksPath=/dev/null \
+        commit --quiet --no-edit -m $'Resolve shared skill edits\n\nAgent-Skills-Client: 1' || return 1
+    resolved_commit=$(git -C "$worktree" rev-parse HEAD)
+}
+
+# Request: {upstream, files: [{path, take: mine|library|edited, mine, library, text}]}, where mine and
+# library are the object ids that were shown. Exit 5: the conflict changed and nothing was merged.
+cmd_resolve() {
+    local revisions head upstream pushed=true result=0
+    export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
+    export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
+    resolve_request=$1
+    jq -e '(.upstream | type == "string") and (.files | type == "array")' "$resolve_request" >/dev/null || {
+        echo 'Invalid resolution request.' >&2; return 1;
+    }
+    assert_automatic_commits || return 1
+    publish_local_changes || return 1
+    revisions=$(diverged_revisions) || return 1
+    read -r head upstream <<<"$revisions"
+    if [[ -z "$revisions" || "$upstream" != "$(jq -r '.upstream' "$resolve_request")" ]]; then
+        echo 'The library changed; review the conflict again.' >&2; return 5
+    fi
+    resolve_head=$head resolve_upstream=$upstream resolved_commit=''
+    trial_merge "$head" "$upstream" apply_choices || result=$?
+    if ((result == 5)); then echo 'The conflict changed; review it again.' >&2; fi
+    ((result == 0)) || return "$result"
+    git -C "$repo" merge --quiet --ff-only --no-overwrite-ignore "$resolved_commit" || return 1
+    if ! git -C "$repo" -c credential.interactive=false push --quiet; then
+        pushed=false; echo 'Publication failed; the next synchronization retries it.' >&2
+    fi
+    apply_bindings || echo 'Some skill links need attention; see status.' >&2
+    jq -cn --argjson p "$pushed" '{resolved: true, pushed: $p}'
+}
