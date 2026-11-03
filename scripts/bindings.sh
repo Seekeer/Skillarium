@@ -47,7 +47,7 @@ global_json() {
 }
 
 library_skill() {
-    jq -e --arg name "$1" '.skills | has($name)' "$repo/sources.json" >/dev/null 2>&1 && check_skill "$1"
+    check_skill "$1"
 }
 
 # Registered folders are compared by their physical path; missing ones lexically.
@@ -235,7 +235,7 @@ set_global_links() {
 # Brings links of every registered project and global folder to the saved choices.
 apply_bindings() {
     local project name names errors=0
-    names=$(skill_names) || return 1
+    names=$(library_names) || return 1
     while IFS= read -r project; do
         [[ -n "$project" ]] || continue
         reconcile_project "$project" || errors=1
@@ -381,7 +381,7 @@ cmd_global() {
 
 cmd_status() {
     local name project names folder rows=() projects=() entries state_name links
-    names=$(skill_names) || return 1
+    names=$(library_names) || return 1
     while IFS= read -r project; do
         [[ -n "$project" ]] || continue
         local available=true error=null skills=() list

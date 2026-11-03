@@ -14,12 +14,15 @@ import tempfile
 import time
 import unittest
 
+from fake_hosting import FakeHosting, protect
+
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == 'nt'
 CLIENT = 'powershell' if WINDOWS else 'bash'
 PWSH = os.environ.get('AGENT_SKILLS_PWSH') or 'powershell.exe'
 CLIENT_FILES = ['install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', '.gitattributes',
-                'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1']
+                'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
+                'scripts/sync-hidden.vbs', 'agent-skills.json']
 AGENTS = ['.agents', '.claude']
 SHARED, OTHER = 'shared-skill', 'other-skill'
 
@@ -215,6 +218,27 @@ class ProjectBindingTests(unittest.TestCase):
         self.assertNotIn('own-skill', (self.library / 'sources.json').read_text())
         self.assertNotIn('own-skill', json.dumps(self.status()))
         self.assertEqual(self.git(project, 'status', '--porcelain'), '')
+
+    def test_unregistered_client_skill_can_be_bound_and_keeps_global_choice(self):
+        name = 'client-local'
+        folder = self.library / 'skills' / name
+        folder.mkdir()
+        (folder / 'SKILL.md').write_text(
+            f'---\nname: {name}\ndescription: Local client skill\n---\nLocal\n')
+        self.background()
+        self.assert_global(True, name)
+        self.assertEqual(self.skill_status(name)['name'], name)
+        project = self.make_project('local skill project')
+        self.projects('register', project)
+        self.projects('bind', project, name)
+        self.assert_project_bound(project, name)
+        self.assert_global(False, name)
+        self.background()
+        self.assert_project_bound(project, name)
+        self.assert_global(False, name)
+        self.projects('unbind', project, name, 'global')
+        self.assert_project_unbound(project, name)
+        self.assert_global(True, name)
 
     # 2 -----------------------------------------------------------------------
     def test_first_binding_moves_global_links_to_selected_projects(self):
@@ -475,6 +499,13 @@ class ProjectBindingTests(unittest.TestCase):
         self.projects('bind', project, SHARED)
         self.projects('global', OTHER, 'off')
         (self.project_link(project, '.agents') / 'notes.md').write_text('shared edit\n', newline='\n')
+        protect(self.remote)
+        host = FakeHosting(self.remote, self.env)
+        self.addCleanup(host.stop)
+        self.git(self.library, 'config', 'agent-skills.machine', 'bindings-test')
+        self.git(self.library, 'config', 'agent-skills.api', host.api)
+        self.git(self.library, 'config', 'credential.helper',
+                 '!f() { echo username=test; echo password=secret; }; f')
         self.publish()
         checkout = self.root / 'published'
         self.git(self.root, 'clone', str(self.remote), str(checkout))
