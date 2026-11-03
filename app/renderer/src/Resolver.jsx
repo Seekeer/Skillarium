@@ -19,7 +19,7 @@ const KEYS = [
   ['Alt+Backspace', 'сбросить различие'],
   ['Ctrl+Alt+← / Ctrl+Alt+→', 'весь файл слева / справа'],
   ['Alt+PgUp / Alt+PgDn', 'предыдущий / следующий файл'],
-  ['Ctrl+Enter', 'применить'],
+  ['Ctrl+Enter', 'применить файл и открыть следующий; на последнем — применить всё'],
 ];
 
 // Deleted and binary files have no lines to align; they are taken as a whole.
@@ -305,6 +305,15 @@ export default function Resolver({ sync, onCancel, onApply }) {
   });
   const openFile = (index) => setSelected(files[(index + files.length) % files.length].path);
   const apply = () => onApply({ upstream: sync.upstream, files: files.map((item) => resolution(item, states[item.path])) });
+  const fileDone = resolved(file, state, blocks);
+  // Applying a file moves on to the next one still waiting; the last one saves everything.
+  const applyFile = () => {
+    if (ready) { apply(); return; }
+    if (!fileDone) return;
+    const order = [...files.slice(fileIndex + 1), ...files.slice(0, fileIndex)];
+    const next = order.find((item) => !resolved(item, states[item.path], blocksByPath[item.path]));
+    if (next) setSelected(next.path);
+  };
   const cancel = () => {
     if (!touched || window.confirm('Закрыть разбор? Сделанный выбор будет потерян, файлы не изменятся.')) onCancel();
   };
@@ -316,7 +325,7 @@ export default function Resolver({ sync, onCancel, onApply }) {
       const { key, altKey, ctrlKey, shiftKey } = event;
       let action = null;
       if (key === 'Escape') action = cancel;
-      else if (ctrlKey && !altKey && key === 'Enter') action = () => ready && apply();
+      else if (ctrlKey && !altKey && key === 'Enter') action = applyFile;
       else if (altKey && ctrlKey && key === 'ArrowLeft') action = () => takeAll('mine');
       else if (altKey && ctrlKey && key === 'ArrowRight') action = () => takeAll('library');
       else if (altKey && !ctrlKey) {
@@ -348,7 +357,8 @@ export default function Resolver({ sync, onCancel, onApply }) {
         <header className="merge-header">
           <h2 id="resolver-title">Разбор конфликта синхронизации</h2>
           <p>Левая — ваша версия, правая — версия общей библиотеки, внизу итог. Он заменит обе версии
-            здесь и в библиотеке; до нажатия «Применить» ничего не меняется.</p>
+            здесь и в библиотеке. «Применить» принимает итог файла и открывает следующий; файлы меняются
+            только после «Применить всё».</p>
         </header>
         <nav className="merge-files" aria-label="Файлы с конфликтом">
           {conflictSkills(sync).map((name) => (
@@ -415,8 +425,8 @@ export default function Resolver({ sync, onCancel, onApply }) {
           <Action label="Следующий файл" keys="Alt+PgDn" onClick={() => openFile(fileIndex + 1)} />
           <span className="merge-sep" />
           <Action label="Отмена" keys="Esc" onClick={cancel} />
-          <button type="button" className="primary apply" disabled={!ready} onClick={apply}>
-            Применить <Keys>Ctrl+Enter</Keys>
+          <button type="button" className="primary apply" disabled={!ready && !fileDone} onClick={applyFile}>
+            {ready ? 'Применить всё' : 'Применить и к следующему файлу'} <Keys>Ctrl+Enter</Keys>
           </button>
         </footer>
       </div>
