@@ -191,27 +191,29 @@ test('shows a stopped synchronization and resolves the conflict with an edited v
   const versions = dialog.getByRole('region', { name: 'Сравнение версий' });
   await expect(versions).toContainText('Моя правка');
   await expect(versions).toContainText('Правка коллеги');
-  await expect(dialog.getByRole('region', { name: 'Итог' })).toContainText('Различие 1 не выбрано');
-  await expect(dialog.getByRole('button', { name: 'Применить' })).toBeDisabled();
-  await dialog.getByRole('button', { name: 'Отмена' }).click();
+  const merged = dialog.getByRole('textbox', { name: `Итоговый текст skills/${SHARED}/SKILL.md` });
+  const apply = dialog.getByRole('button', { name: /^Применить/ });
+  await expect(merged).toHaveValue(text('Моя правка'));
+  await expect(dialog.getByRole('button', { name: 'Различие 1: не выбрано' })).toBeVisible();
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole('button', { name: /^Отмена/ }).click();
   await expect(dialog).toBeHidden();
   expect(fs.readFileSync(skillFile(fixture.library), 'utf8')).toBe(text('Моя правка'));
 
   await banner.getByRole('button', { name: 'Разобрать конфликт' }).click();
   dialog = page.getByRole('dialog', { name: 'Разбор конфликта синхронизации' });
-  // Each difference takes a side into the result below; the result can then be edited by hand.
-  const result = dialog.getByRole('region', { name: 'Итог' });
-  await dialog.getByRole('button', { name: 'Различие 1: взять версию библиотеки' }).click();
-  await expect(result).toContainText('Правка коллеги');
-  await expect(result).not.toContainText('Моя правка');
-  await expect(dialog.getByRole('button', { name: 'Применить' })).toBeEnabled();
-  await dialog.getByRole('button', { name: 'Различие 1: взять обе версии' }).click();
-  await expect(result).toContainText('Моя правка');
-  await result.getByRole('button', { name: 'Редактировать вручную' }).click();
-  const merged = dialog.getByRole('textbox', { name: `Итоговый текст skills/${SHARED}/SKILL.md` });
+  // Buttons and WinMerge-style hotkeys put a side into the editable result below.
+  await dialog.getByRole('button', { name: /Взять правую/ }).click();
+  await expect(merged).toHaveValue(text('Правка коллеги'));
+  await expect(dialog.getByRole('button', { name: 'Различие 1: правая' })).toBeVisible();
+  await expect(apply).toBeEnabled();
+  await page.keyboard.press('Alt+Shift+ArrowLeft');
   await expect(merged).toHaveValue(text('Моя правка\nПравка коллеги'));
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect(merged).toHaveValue(text('Моя правка'));
   await merged.fill(text('Моя правка и правка коллеги'));
-  await dialog.getByRole('button', { name: 'Применить' }).click();
+  await expect(dialog.getByRole('button', { name: 'Различие 1: правка вручную' })).toBeVisible();
+  await page.keyboard.press('Control+Enter');
 
   await expect(page.getByRole('alert')).toContainText('итог опубликован в общей библиотеке');
   await expect(banner).toBeHidden();

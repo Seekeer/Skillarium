@@ -83,16 +83,47 @@ export function alignBlocks(left, right) {
   return blocks;
 }
 
-// Joins common lines with the version picked for each difference; unpicked ones use `fallback`.
-export function assemble(blocks, picks, trailingNewline, fallback = null) {
-  const out = [];
-  for (const block of blocks) {
-    if (block.type === 'same') { out.push(...block.lines); continue; }
-    const pick = picks[block.index] || fallback;
-    if (pick === 'mine' || pick === 'both') out.push(...block.left);
-    if (pick === 'library' || pick === 'both') out.push(...block.right);
-  }
-  return out.join('\n') + (trailingNewline && out.length ? '\n' : '');
+// The editable result is one text split into a segment per block, so a later choice for a
+// difference replaces exactly its own lines, even after hand edits elsewhere.
+export const segmentText = (list) => list.map((line) => `${line}\n`).join('');
+
+export const PICKS = {
+  mine: (block) => block.left,
+  library: (block) => block.right,
+  'mine-library': (block) => [...block.left, ...block.right],
+  'library-mine': (block) => [...block.right, ...block.left],
+};
+
+export function initialSegments(blocks) {
+  return blocks.map((block) => segmentText(block.type === 'same' ? block.lines : block.left));
+}
+
+// Applies a whole-text edit to the segments: the changed range goes to the first segment it touches.
+export function editSegments(segments, text) {
+  const old = segments.join('');
+  let start = 0;
+  while (start < old.length && start < text.length && old[start] === text[start]) start += 1;
+  let tail = 0;
+  while (tail < old.length - start && tail < text.length - start
+    && old[old.length - 1 - tail] === text[text.length - 1 - tail]) tail += 1;
+  const end = old.length - tail;
+  const starts = [];
+  let offset = 0;
+  for (const segment of segments) { starts.push(offset); offset += segment.length; }
+  const span = (index) => [starts[index], starts[index] + segments[index].length];
+  const indexes = segments.map((_, index) => index);
+  let hit = start < end
+    ? indexes.filter((index) => { const [from, to] = span(index); return from < end && to > start; })
+    : indexes.filter((index) => { const [from, to] = span(index); return from <= start && start < to; });
+  // Typing after the last character continues the segment that ends there.
+  if (!hit.length) hit = [indexes.filter((index) => span(index)[1] === start && segments[index]).pop() ?? 0];
+  const first = hit[0];
+  const last = hit[hit.length - 1];
+  const next = [...segments];
+  next[first] = segments[first].slice(0, start - starts[first]) + text.slice(start, text.length - tail)
+    + segments[last].slice(end - starts[last]);
+  for (let index = first + 1; index <= last; index += 1) next[index] = '';
+  return { segments: next, touched: indexes.slice(first, last + 1) };
 }
 
 export function conflictSkills(sync) {
