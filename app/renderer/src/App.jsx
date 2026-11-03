@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CELL_TEXT, basename, buildMatrix, cellOf, changedLines, conflictSkills, globalCaption, lines, parent, problems } from './model.js';
+import { CELL_TEXT, basename, buildMatrix, cellOf, conflictSkills, globalCaption, parent, problems } from './model.js';
+import Resolver from './Resolver.jsx';
 
 const api = window.skills;
 
@@ -44,104 +45,6 @@ function Socket({ row, project, entry, busy, onToggle }) {
       disabled={blocked} onClick={onToggle}>
       <span className="socket-mark" aria-hidden="true">{state === 'conflict' || state === 'missing-skill' ? '!' : ''}</span>
     </button>
-  );
-}
-
-function Version({ title, side, changed }) {
-  let body;
-  if (!side) body = <p className="version-note">Файл удалён</p>;
-  else if (side.binary) body = <p className="version-note">Двоичный файл, показать нельзя</p>;
-  else {
-    body = (
-      <pre className="version-text">
-        {lines(side.text).map((line, index) => (
-          <span key={index} className={changed[index] ? 'line changed' : 'line'}>{line || ' '}</span>
-        ))}
-      </pre>
-    );
-  }
-  return (
-    <section className="version" aria-label={title}>
-      <h4>{title}</h4>
-      {body}
-    </section>
-  );
-}
-
-function ConflictFile({ file, choice, onChoose }) {
-  const diff = changedLines(file.mine?.text, file.library?.text);
-  const editable = !(file.mine?.binary || file.library?.binary);
-  const option = (take, label) => (
-    <label className={`take${choice?.take === take ? ' picked' : ''}`}>
-      <input type="radio" name={file.path} checked={choice?.take === take}
-        onChange={() => onChoose({ take, text: take === 'edited' ? (choice?.text ?? file.mine?.text ?? file.library?.text ?? '') : undefined })} />
-      {label}
-    </label>
-  );
-  return (
-    <li className="conflict-file">
-      <h3><code>{file.path.slice(`skills/${file.skill}/`.length)}</code></h3>
-      <div className="versions">
-        <Version title="На этом компьютере" side={file.mine} changed={diff.left} />
-        <Version title="В общей библиотеке" side={file.library} changed={diff.right} />
-      </div>
-      <div className="takes" role="radiogroup" aria-label={`Итог для ${file.path}`}>
-        {option('mine', file.mine ? 'Оставить мою версию' : 'Удалить, как у меня')}
-        {option('library', file.library ? 'Взять версию библиотеки' : 'Удалить, как в библиотеке')}
-        {editable && option('edited', 'Свой вариант')}
-      </div>
-      {choice?.take === 'edited' && (
-        <textarea className="merged" aria-label={`Итоговый текст ${file.path}`} spellCheck={false}
-          rows={Math.min(18, Math.max(6, lines(choice.text).length + 1))}
-          value={choice.text} onChange={(event) => onChoose({ take: 'edited', text: event.target.value })} />
-      )}
-    </li>
-  );
-}
-
-function Resolver({ sync, onCancel, onApply }) {
-  const [choices, setChoices] = useState({});
-  const box = useRef(null);
-  useEffect(() => {
-    box.current?.focus();
-    const onKey = (event) => { if (event.key === 'Escape') onCancel(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
-  const files = sync.files;
-  const ready = files.every((file) => choices[file.path]);
-  const apply = () => onApply({
-    upstream: sync.upstream,
-    files: files.map((file) => ({ path: file.path, mine: file.mine?.id ?? null, library: file.library?.id ?? null, ...choices[file.path] })),
-  });
-  return (
-    <div className="backdrop">
-      <div className="resolver" role="dialog" aria-modal="true" aria-labelledby="resolver-title" tabIndex={-1} ref={box}>
-        <header>
-          <h2 id="resolver-title">Разбор конфликта синхронизации</h2>
-          <p>Эти файлы изменили и здесь, и в общей библиотеке. Выберите итог для каждого: он заменит обе версии
-            здесь и в библиотеке. До нажатия «Применить» ничего не меняется.</p>
-        </header>
-        <div className="resolver-body">
-          {conflictSkills(sync).map((name) => (
-            <section key={name} aria-label={`Скилл ${name}`}>
-              <h3 className="resolver-skill">{name}</h3>
-              <ul>
-                {files.filter((file) => file.skill === name).map((file) => (
-                  <ConflictFile key={file.path} file={file} choice={choices[file.path]}
-                    onChoose={(choice) => setChoices((old) => ({ ...old, [file.path]: choice }))} />
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-        <footer className="modal-actions">
-          <span className="progress">Выбрано {files.filter((file) => choices[file.path]).length} из {files.length}</span>
-          <button type="button" className="quiet" onClick={onCancel}>Отмена</button>
-          <button type="button" className="primary" disabled={!ready} onClick={apply}>Применить</button>
-        </footer>
-      </div>
-    </div>
   );
 }
 
