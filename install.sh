@@ -36,6 +36,7 @@ exec 9>"$lock_path"
 if ! flock -n 9; then echo 'Another sync is running; skipped.'; exit 0; fi
 
 source "$repo/scripts/client.sh"
+source "$repo/scripts/bindings.sh"
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
 # Client functions report their own errors; errexit stays off inside them.
@@ -50,7 +51,8 @@ case "$mode" in
 esac
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
-install_registry || result=1
+# Global links and registered project bindings follow the local choices.
+{ load_bindings && apply_bindings; } || result=1
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install ]]; then exit 0; fi
 

@@ -1,0 +1,16 @@
+name: Project bindings
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Project bindings with real symlinks
+        run: |
+          command -v jq flock git
+          python3 -m unittest discover -s tests -p 'test_project_bindings.py' -v

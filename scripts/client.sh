@@ -432,7 +432,7 @@ list_updates() {
     local ref message count=0
     while IFS= read -r ref; do
         [[ -n "$ref" ]] || continue
-        message=$(git -C "$repo" log -1 --format=%B "$ref") || return 1
+        message=$(git -C "$repo" log --first-parent --grep='^Agent-Skills-Proposal: ' -1 --format=%B "$ref") || return 1
         echo "UPDATE $(trailer "$message" Proposal): $(trailer "$message" Status), policy $(trailer "$message" Policy), incoming $(trailer "$message" Incoming-Revision | cut -c1-12), commit $(git -C "$repo" rev-parse "$ref")"
         count=$((count + 1))
     done < <(proposal_refs)
@@ -452,7 +452,7 @@ review_update() {
     git -C "$repo" -c credential.interactive=false fetch -q --prune origin || return 1
     found=$(find_proposal "$name") || return 1
     ref=${found% *}; head=${found#* }; branch=${ref#refs/remotes/origin/}
-    message=$(git -C "$repo" log -1 --format=%B "$head")
+    message=$(git -C "$repo" log --first-parent --grep='^Agent-Skills-Proposal: ' -1 --format=%B "$head")
     status=$(trailer "$message" Status)
     echo "Proposal: $name ($status), policy $(trailer "$message" Policy)"
     echo "Incoming revision: $(trailer "$message" Incoming-Revision)"
@@ -519,7 +519,7 @@ proposal_for() {
     git -C "$repo" -c credential.interactive=false fetch -q --prune origin || return 1
     found=$(find_proposal "$name") || return 1
     [[ "${found#* }" == "$commit" ]] || { echo 'Proposal changed since review; review it again.' >&2; return 1; }
-    proposal_message=$(git -C "$repo" log -1 --format=%B "$commit")
+    proposal_message=$(git -C "$repo" log --first-parent --grep='^Agent-Skills-Proposal: ' -1 --format=%B "$commit")
     proposal_branch=${found% *}; proposal_branch=${proposal_branch#refs/remotes/origin/}
     shared=$(git -C "$repo" rev-parse -q --verify "refs/remotes/origin/$main_branch:skills/$name") || shared=none
     [[ "$shared" == "$(trailer "$proposal_message" Shared-Tree)" ]] || {
@@ -575,6 +575,9 @@ resolve_update() {
         git -C "$repo" -c credential.interactive=false push -q origin "$head:refs/heads/$proposal_branch" || {
             echo 'Proposal push failed; resolution not published.' >&2; return 1;
         }
+    fi
+    if [[ "$strategy" == merged && "$head" != "$commit" ]]; then
+        git -C "$worktree" update-ref HEAD "$head" "$commit" || return 1
     fi
     accept_proposal "$name" "$proposal_branch" "$head" "$target" "$(trailer "$proposal_message" Incoming-Tree)" || return 1
     [[ "$strategy" != merged ]] || git -C "$repo" worktree remove --force "$worktree"

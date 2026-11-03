@@ -133,9 +133,9 @@ def dispatch(args):
             return maintenance.maintain(repo, publish=not check_only, apply_auto=args.apply_auto,
                                         dry_run=check_only)
         if args.command == 'approve':
-            return maintenance.approve(repo, args.name, args.revision)
+            return maintenance.approve(repo, args.name, args.revision, args.commit)
         if args.command == 'resolve':
-            return maintenance.resolve(repo, args.name, args.strategy, args.shared_hash, args.revision)
+            return maintenance.resolve(repo, args.name, args.strategy, args.shared_hash, args.revision, args.commit)
         if args.command == 'set-policy':
             return maintenance.set_policy(repo, args.name, args.policy)
         if args.command == 'assign-server':
@@ -164,9 +164,11 @@ def main():
         if command == 'approve':
             sub.add_argument('name')
             sub.add_argument('--revision', required=True)
+            sub.add_argument('--commit', required=True)
         if command == 'resolve':
             sub.add_argument('name')
             sub.add_argument('--revision')
+            sub.add_argument('--commit')
             sub.add_argument('--shared-hash', required=True)
             sub.add_argument('--strategy', choices=('keep-shared', 'take-upstream', 'detach'), required=True)
         if command == 'set-policy':
@@ -199,8 +201,8 @@ def main():
     args = parser.parse_args()
     if args.command == 'register' and args.policy is None:
         args.policy = 'auto' if args.auto_update == 'yes' else 'confirm'
-    if args.command == 'resolve' and args.strategy != 'detach' and not args.revision:
-        parser.error('--revision is required except for --strategy detach')
+    if args.command == 'resolve' and args.strategy != 'detach' and (not args.revision or not args.commit):
+        parser.error('--revision and --commit are required except for --strategy detach')
     if args.command == 'import-local' and args.dry_run:
         args.publish = False
     args.apply_auto = getattr(args, 'apply_auto', False)

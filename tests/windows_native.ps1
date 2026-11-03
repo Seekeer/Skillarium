@@ -12,7 +12,7 @@ $remote = Join-Path $testRoot 'catalog.git'
 $consumer = Join-Path $testRoot 'client with spaces'
 $savedHome = $HOME
 $savedEnvironment = @{}
-foreach ($key in @('HOME', 'USERPROFILE', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM',
+foreach ($key in @('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM',
                    'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')) {
     $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
@@ -36,13 +36,14 @@ try {
     Set-Variable -Name HOME -Value $testHome -Scope Global -Force
     $env:HOME = $testHome
     $env:USERPROFILE = $testHome
+    $env:LOCALAPPDATA = Join-Path $testHome 'AppData/Local'
     $env:GIT_CONFIG_GLOBAL = Join-Path $testRoot 'global.gitconfig'
     [IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, '')
     $env:GIT_CONFIG_NOSYSTEM = '1'
     $env:GIT_AUTHOR_NAME = $env:GIT_COMMITTER_NAME = 'agent-skills-test'
     $env:GIT_AUTHOR_EMAIL = $env:GIT_COMMITTER_EMAIL = 'test@example.invalid'
 
-    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
+    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $projectRoot $relative) -Destination $destination

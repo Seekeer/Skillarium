@@ -123,6 +123,10 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('Conflict markers remain', lib.powershell(self.client, 'Resolve', expected=1,
             extra=['-Skill', 'first-skill', '-Commit', commit, '-Strategy', 'merged']))
         merged.write_bytes(b'---\nname: first-skill\ndescription: Test skill\n---\nOur line\nTheir line\n')
+        lib.host.faults['merge'] = 1
+        lib.powershell(self.client, 'Resolve', expected=1,
+                       extra=['-Skill', 'first-skill', '-Commit', commit, '-Strategy', 'merged'])
+        _, commit = self.review()
         lib.powershell(self.client, 'Resolve', extra=['-Skill', 'first-skill', '-Commit', commit, '-Strategy', 'merged'])
         text = lib.show('skills/first-skill/SKILL.md')
         self.assertIn('Our line', text)

@@ -283,6 +283,10 @@ class LinuxClientTests(unittest.TestCase):
         self.assertIn('<<<<<<<', merged.read_text())
         self.assertIn('Conflict markers remain', lib.sync(self.client, '--resolve', args=['first-skill', commit, 'merged'], expected=1))
         merged.write_text('---\nname: first-skill\ndescription: Test skill\n---\nOur line\nTheir line\n')
+        lib.host.faults['merge'] = 1
+        lib.sync(self.client, '--resolve', args=['first-skill', commit, 'merged'], expected=1)
+        review = lib.sync(self.client, '--review', args=['first-skill'])
+        commit = review.split('Proposal commit: ')[1].split()[0]
         lib.sync(self.client, '--resolve', args=['first-skill', commit, 'merged'])
         text = lib.show('skills/first-skill/SKILL.md')
         self.assertIn('Our line', text)

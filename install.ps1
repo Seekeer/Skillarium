@@ -62,11 +62,14 @@ try {
         'Approve' { Approve-Update -Name $Skill -Commit $Commit; return }
         'Resolve' { Resolve-Update -Name $Skill -Commit $Commit -Strategy $Strategy; return }
     }
+    . (Join-Path $repo 'scripts\bindings.ps1')
     if ($Mode -ne 'Link') {
         try { Sync-Repository }
         catch { Write-Warning $_.Exception.Message; $failed = $true }
     }
-    Install-Registry
+    # Global links and registered project bindings follow the local choices.
+    Read-Bindings
+    if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -in @('Install', 'Sync')) {
         $launcher = Join-Path $repo 'scripts\sync-hidden.vbs'

@@ -1,6 +1,8 @@
 # Git-only PowerShell client. The server owns all external-source operations.
 # Publications go through proposal branches and pull requests; main is never pushed.
-$cache = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'agent-skills'
+$cacheRoot = $env:LOCALAPPDATA
+if (-not $cacheRoot) { $cacheRoot = [Environment]::GetFolderPath('LocalApplicationData') }
+$cache = Join-Path $cacheRoot 'agent-skills'
 $mainBranch = 'main'
 $proposalPrefix = 'agent-skills/update'
 
@@ -406,7 +408,10 @@ function Sync-Repository {
 
 function New-SkillLink {
     param([string]$Path, [string]$Target)
-    New-Item -ItemType Junction -Path $Path -Target $Target | Out-Null
+    # Junctions need no privileges on Windows; PowerShell on Linux uses symlinks.
+    $type = 'SymbolicLink'
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $type = 'Junction' }
+    New-Item -ItemType $type -Path $Path -Target $Target | Out-Null
 }
 
 function Set-SkillLinks {
@@ -474,7 +479,7 @@ function Show-Updates {
     $refs = @(Get-ProposalRefs)
     if (-not $refs.Count) { Write-Output 'No pending external updates.'; return }
     foreach ($ref in $refs) {
-        $message = (Invoke-Git -GitArgs @('log', '-1', '--format=%B', $ref)) -join "`n"
+        $message = (Invoke-Git -GitArgs @('log', '--first-parent', '--grep=^Agent-Skills-Proposal: ', '-1', '--format=%B', $ref)) -join "`n"
         $incoming = Get-Trailer $message 'Incoming-Revision'
         Write-Output ("UPDATE $(Get-Trailer $message 'Proposal'): $(Get-Trailer $message 'Status'), policy $(Get-Trailer $message 'Policy'), " +
             "incoming $($incoming.Substring(0, [Math]::Min(12, $incoming.Length))), commit $(Invoke-Git -GitArgs @('rev-parse', $ref))")
@@ -506,7 +511,7 @@ function Show-Review {
     if (-not $refs.Count) { throw "No pending update proposal for $Name." }
     $head = [string](Invoke-Git -GitArgs @('rev-parse', $refs[0]))
     $branch = $refs[0].Substring('refs/remotes/origin/'.Length)
-    $message = (Invoke-Git -GitArgs @('log', '-1', '--format=%B', $head)) -join "`n"
+    $message = (Invoke-Git -GitArgs @('log', '--first-parent', '--grep=^Agent-Skills-Proposal: ', '-1', '--format=%B', $head)) -join "`n"
     $status = Get-Trailer $message 'Status'
     Write-Output "Proposal: $Name ($status), policy $(Get-Trailer $message 'Policy')"
     Write-Output "Incoming revision: $(Get-Trailer $message 'Incoming-Revision')"
@@ -543,7 +548,7 @@ function Get-Proposal {
     if (-not $refs.Count -or [string](Invoke-Git -GitArgs @('rev-parse', $refs[0])) -ne $Commit) {
         throw 'Proposal changed since review; review it again.'
     }
-    $message = (Invoke-Git -GitArgs @('log', '-1', '--format=%B', $Commit)) -join "`n"
+    $message = (Invoke-Git -GitArgs @('log', '--first-parent', '--grep=^Agent-Skills-Proposal: ', '-1', '--format=%B', $Commit)) -join "`n"
     $shared = [string](& git -C $repo rev-parse -q --verify "refs/remotes/origin/${mainBranch}:skills/$Name" 2>$null)
     if (-not $shared) { $shared = 'none' }
     if ($shared -ne (Get-Trailer $message 'Shared-Tree')) { throw 'Shared skill changed since the proposal; the server will prepare a new one.' }
@@ -620,6 +625,9 @@ function Resolve-Update {
         if ((Invoke-GitCode -GitArgs @('-c', 'credential.interactive=false', 'push', '-q', 'origin', "${head}:refs/heads/$($proposal.Branch)")) -ne 0) {
             throw 'Proposal push failed; resolution not published.'
         }
+    }
+    if ($Strategy -eq 'merged' -and $head -ne $Commit) {
+        Invoke-Git -Directory $worktree -GitArgs @('update-ref', 'HEAD', $head, $Commit) | Out-Null
     }
     Approve-Proposal -Name $Name -Branch $proposal.Branch -Head $head -Result $target -Incoming (Get-Trailer $proposal.Message 'Incoming-Tree')
     if ($Strategy -eq 'merged') { Invoke-Git -GitArgs @('worktree', 'remove', '--force', $worktree) | Out-Null }

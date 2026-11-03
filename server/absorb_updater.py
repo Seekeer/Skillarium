@@ -16,7 +16,8 @@ import sys
 import tempfile
 
 CLIENT_FILES = ('install.sh', 'install.ps1', 'scripts/client.sh',
-                'scripts/client.ps1', 'scripts/sync-hidden.vbs', 'README.md', '.gitattributes')
+                'scripts/client.ps1', 'scripts/sync-hidden.vbs', 'projects.sh', 'projects.ps1',
+                'scripts/bindings.sh', 'scripts/bindings.ps1', 'README.md', '.gitattributes')
 MANIFEST = '.agent-skills-client.json'
 # Updater root files that would collide with library entry points.
 RENAMED = {'README.md': 'server/README.md'}

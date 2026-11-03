@@ -63,6 +63,7 @@ class ServerTests(unittest.TestCase):
         branch = refs.splitlines()[0]
         message = self.lib.git(self.lib.remote, 'log', '-1', '--format=%B', branch)
         values = dict(line[len('Agent-Skills-'):].split(': ', 1) for line in message.splitlines() if line.startswith('Agent-Skills-'))
+        values['head'] = self.lib.git(self.lib.remote, 'rev-parse', branch)
         return branch, values
 
     def report(self):
@@ -105,24 +106,60 @@ class ServerTests(unittest.TestCase):
         # Repeated checks of an unchanged proposal create no duplicates.
         lib.manage('maintain', '--apply-auto')
         self.assertEqual(len([p for p in lib.host.pulls.values() if p['head'].startswith('agent-skills/update/')]), 1)
-        self.assertIn('source moved', lib.manage('approve', 'first-skill', '--revision', '0' * 40, expected=1))
-        lib.manage('approve', 'first-skill', '--revision', revision)
+        self.assertIn('source moved', lib.manage('approve', 'first-skill', '--commit', values['head'], '--revision', '0' * 40, expected=1))
+        lib.manage('approve', 'first-skill', '--commit', values['head'], '--revision', revision)
         self.assertIn('reviewed version', lib.show('skills/first-skill/SKILL.md'))
         self.assertEqual(lib.registry()['skills']['first-skill']['revision'], revision)
+
+    def test_regenerated_result_requires_a_new_exact_approval(self):
+        lib = self.lib
+        lib.manage('set-policy', 'first-skill', 'confirm')
+        revision = self.update_upstream('reviewed update')
+        lib.manage('maintain')
+        _, old = self.proposal()
+        self.edit_shared('local.md', b'changed shared result\n')
+        lib.manage('maintain')
+        _, new = self.proposal()
+        self.assertEqual(old['Incoming-Revision'], new['Incoming-Revision'])
+        self.assertNotEqual(old['Result-Tree'], new['Result-Tree'])
+        self.assertIn('changed since review', lib.manage('approve', 'first-skill',
+                      '--revision', revision, '--commit', old['head'], expected=1))
+        lib.manage('approve', 'first-skill', '--revision', revision, '--commit', new['head'])
+
+    def test_refreshed_proposal_can_be_reviewed_and_approved_after_schedule_failure(self):
+        lib = self.lib
+        lib.manage('set-policy', 'first-skill', 'confirm')
+        revision = self.update_upstream('reviewed update')
+        lib.manage('maintain')
+        branch, values = self.proposal()
+        # Move main without changing this proposal's skill, policy or inputs.
+        lib.write_skill('another-skill', 'unrelated', root=lib.upstream / 'skills')
+        lib.commit(lib.upstream, 'Unrelated skill')
+        lib.register('another-skill')
+        lib.host.faults['merge'] = 1
+        lib.manage('approve', 'first-skill', '--revision', revision,
+                   '--commit', values['head'], expected=1)
+        refreshed = lib.git(lib.remote, 'rev-parse', branch)
+        self.assertNotEqual(refreshed, values['head'])
+        self.assertIn('Proposal first-skill: confirm', lib.manage('status'))
+        self.assertIn('changed since review', lib.manage('approve', 'first-skill',
+                      '--revision', revision, '--commit', values['head'], expected=1))
+        lib.manage('approve', 'first-skill', '--revision', revision, '--commit', refreshed)
+        self.assertIn('reviewed update', lib.show('skills/first-skill/SKILL.md'))
 
     def test_changed_incoming_version_replaces_proposal_and_old_approval_fails(self):
         lib = self.lib
         lib.manage('set-policy', 'first-skill', 'confirm')
         old = self.update_upstream('first proposal')
         lib.manage('maintain')
-        old_branch, _ = self.proposal()
+        old_branch, old_values = self.proposal()
         new = self.update_upstream('second proposal')
         lib.manage('maintain')
         branch, values = self.proposal()
         self.assertNotEqual(branch, old_branch)
         self.assertEqual(values['Incoming-Revision'], new)
         self.assertFalse(any(p['state'] == 'open' for p in lib.host.pulls.values() if p['head'] == old_branch))
-        lib.manage('approve', 'first-skill', '--revision', old, expected=1)
+        lib.manage('approve', 'first-skill', '--commit', old_values['head'], '--revision', old, expected=1)
         self.assertIn('version one', lib.show('skills/first-skill/SKILL.md'))
 
     def test_client_edit_is_merged_with_upstream_and_mode_respected(self):
@@ -160,10 +197,10 @@ class ServerTests(unittest.TestCase):
         report = self.report()['first-skill']
         self.assertEqual(report['status'], 'upstream-conflict')
         shared = report['shared']['content_sha256']
-        lib.manage('approve', 'first-skill', '--revision', values['Incoming-Revision'], expected=1)
-        lib.manage('resolve', 'first-skill', '--revision', values['Incoming-Revision'], '--shared-hash', '0' * 64,
+        lib.manage('approve', 'first-skill', '--commit', values['head'], '--revision', values['Incoming-Revision'], expected=1)
+        lib.manage('resolve', 'first-skill', '--commit', values['head'], '--revision', values['Incoming-Revision'], '--shared-hash', '0' * 64,
                    '--strategy', 'take-upstream', expected=1)
-        lib.manage('resolve', 'first-skill', '--revision', values['Incoming-Revision'], '--shared-hash', shared,
+        lib.manage('resolve', 'first-skill', '--commit', values['head'], '--revision', values['Incoming-Revision'], '--shared-hash', shared,
                    '--strategy', 'keep-shared')
         self.assertIn('our line', lib.show('skills/first-skill/SKILL.md'))
         entry = lib.registry()['skills']['first-skill']
@@ -178,7 +215,7 @@ class ServerTests(unittest.TestCase):
         lib.manage('maintain', '--apply-auto', expected=1)
         _, values = self.proposal()
         shared = self.report()['first-skill']['shared']['content_sha256']
-        lib.manage('resolve', 'first-skill', '--revision', values['Incoming-Revision'], '--shared-hash', shared,
+        lib.manage('resolve', 'first-skill', '--commit', values['head'], '--revision', values['Incoming-Revision'], '--shared-hash', shared,
                    '--strategy', 'take-upstream')
         self.assertIn('their line', lib.show('skills/first-skill/SKILL.md'))
         self.assertIn('our line', lib.git(lib.remote, 'log', '-p', 'main', '--', 'skills/first-skill/SKILL.md'))

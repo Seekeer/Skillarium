@@ -54,8 +54,8 @@ python3 server/manage.py maintain --apply-auto
 python3 server/manage.py register example --git-url https://example.org/owner/repo.git --path skills/example --ref refs/heads/main --policy auto
 python3 server/manage.py register example --url https://example.org/SKILL.md --policy confirm
 python3 server/manage.py set-policy example confirm
-python3 server/manage.py approve example --revision <incoming-revision>
-python3 server/manage.py resolve example --revision <incoming-revision> --shared-hash <sha256> --strategy keep-shared|take-upstream
+python3 server/manage.py approve example --revision <incoming-revision> --commit <reviewed-head>
+python3 server/manage.py resolve example --revision <incoming-revision> --commit <reviewed-head> --shared-hash <sha256> --strategy keep-shared|take-upstream
 python3 server/manage.py resolve example --shared-hash <sha256> --strategy detach
 python3 server/manage.py import-local /path/to/my-skill [--dry-run|--no-publish]
 ```

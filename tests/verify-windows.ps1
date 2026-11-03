@@ -11,7 +11,13 @@ function Invoke-Installer($Mode) {
     & $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $fixture 'install.ps1') -Mode $Mode
     Assert-True ($LASTEXITCODE -eq 0) "Installer failed in $Mode mode."
 }
+$savedEnvironment = @{}
+foreach ($key in @('HOME', 'USERPROFILE', 'LOCALAPPDATA')) {
+    $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
 try {
+    $env:HOME = $env:USERPROFILE = Join-Path $fixture 'isolated profile'
+    $env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'AppData/Local'
     New-Item -ItemType Directory -Path (Join-Path $fixture 'scripts') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'scripts\sync-hidden.vbs') -Destination (Join-Path $fixture 'scripts')
     # The child measures its own console visibility, including paths with spaces.
@@ -38,6 +44,7 @@ exit EXIT_CODE
     $installer = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
     $installer.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $taskName + '"')) | Set-Content -LiteralPath (Join-Path $fixture 'install.ps1') -Encoding UTF8
     Copy-Item -LiteralPath (Join-Path $root 'scripts\client.ps1') -Destination (Join-Path $fixture 'scripts')
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\bindings.ps1') -Destination (Join-Path $fixture 'scripts')
     '{"version":2,"skills":{}}' | Set-Content -LiteralPath (Join-Path $fixture 'sources.json') -Encoding ASCII
     & git -C $fixture init -q
     Assert-True ($LASTEXITCODE -eq 0) 'Cannot initialize disposable repository.'
@@ -68,6 +75,9 @@ exit EXIT_CODE
     Assert-True (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) 'Uninstall kept the task.'
     Write-Output 'PASS: install, migration preserving schedule/identity/settings, scheduled sync, reinstall, uninstall.'
 } finally {
+    foreach ($key in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($key, $savedEnvironment[$key], 'Process')
+    }
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($task) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

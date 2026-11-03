@@ -453,7 +453,7 @@ def proposals(repo, name=None):
     found = []
     refs = git(repo, 'for-each-ref', '--format=%(refname)', 'refs/remotes/origin/' + UPDATE_PREFIX).decode().split()
     for ref in refs:
-        message = git(repo, 'log', '-1', '--format=%B', ref).decode()
+        message = git(repo, 'log', '--first-parent', '--grep=^Agent-Skills-Proposal: ', '-1', '--format=%B', ref).decode()
         values = {key: value for key, value in re.findall(r'^Agent-Skills-([A-Za-z-]+): (\S+)$', message, re.M)}
         if 'Proposal' in values and (name is None or values['Proposal'] == name):
             values['branch'] = ref[len('refs/remotes/origin/'):]
@@ -462,11 +462,16 @@ def proposals(repo, name=None):
     return found
 
 
-def current_proposal(ctx, name, revision):
+def current_proposal(ctx, name, revision, commit):
     found = [item for item in proposals(ctx.repo, name) if item['Incoming-Revision'] == revision]
     if not found:
         raise ValueError('No pending proposal for this skill and revision; source moved since review?')
     item = found[0]
+    if item['head'] != commit:
+        raise ValueError('Proposal changed since review; review it again')
+    policy = 'auto' if ctx.registry()['skills'].get(name, {}).get('auto_update') else 'confirm'
+    if policy != item['Policy']:
+        raise ValueError('Update policy changed since the proposal; review it again')
     shared = trees.subtree(ctx.repo, ctx.main, 'skills/' + name) or 'none'
     if shared != item['Shared-Tree']:
         raise ValueError('Shared skill changed since the proposal; wait for the server to prepare a new one')
@@ -497,15 +502,15 @@ def accept(ctx, item, head, expected):
     return 0
 
 
-def approve(repo, name, revision):
+def approve(repo, name, revision, commit):
     ctx = Context(repo, need_server=False)
-    item = current_proposal(ctx, name, revision)
+    item = current_proposal(ctx, name, revision, commit)
     if item['Status'] != 'confirm':
         raise ValueError('Conflict proposals need resolve with keep-shared, take-upstream or a merged result')
     return accept(ctx, item, item['head'], {'skills/' + name: item['Result-Tree'], 'upstream/' + name: item['Incoming-Tree']})
 
 
-def resolve(repo, name, strategy, shared_hash, revision=None):
+def resolve(repo, name, strategy, shared_hash, revision=None, commit=None):
     ctx = Context(repo, need_server=strategy == 'detach')
     registry = ctx.registry()
     entry = registry['skills'].get(name)
@@ -524,7 +529,7 @@ def resolve(repo, name, strategy, shared_hash, revision=None):
         ctx.close_others(f'{UPDATE_PREFIX}{name}/')
         print(f'{name}: resolved (detach; kept as local skill)')
         return 0
-    item = current_proposal(ctx, name, revision)
+    item = current_proposal(ctx, name, revision, commit)
     head = item['head']
     target = shared if strategy == 'keep-shared' else item['Incoming-Tree']
     if trees.subtree(ctx.repo, head, 'skills/' + name) != target:
@@ -580,7 +585,7 @@ def status(repo):
             print(f'  {name}: {item.get("status")}' + (f' ({item["error"]})' if item.get('error') else ''))
     for item in proposals(repo):
         print(f'Proposal {item["Proposal"]}: {item["Status"]}, policy {item["Policy"]}, '
-              f'incoming {item["Incoming-Revision"][:12]}, branch {item["branch"]}')
+              f'incoming {item["Incoming-Revision"][:12]}, commit {item["head"]}, branch {item["branch"]}')
     state = git_dir(repo) / 'agent-skills-publication'
     if state.exists():
         print('Client publication: ' + state.read_text(encoding='utf-8').strip())
