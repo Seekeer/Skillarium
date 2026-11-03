@@ -189,7 +189,9 @@ test('explains unapplied connections and unavailable projects', async () => {
 
   await answerFolderPicker(app, fixture.alpha);
   await page.getByRole('button', { name: 'Добавить проект' }).first().click();
-  await page.getByRole('button', { name: new RegExp(`^${SHARED} в project alpha:`) }).click();
+  const alphaCell = page.getByRole('button', { name: new RegExp(`^${SHARED} в project alpha:`) });
+  await alphaCell.click();
+  await expect(alphaCell).toHaveAccessibleName(`${SHARED} в project alpha: подключён`);
   fs.renameSync(fixture.alpha, `${fixture.alpha} moved`);
   await page.getByRole('button', { name: 'Обновить' }).click();
   await expect(page.getByRole('columnheader', { name: /project alpha/ })).toContainText('папка недоступна');

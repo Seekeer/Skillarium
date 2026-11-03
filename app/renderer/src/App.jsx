@@ -223,6 +223,7 @@ export default function App() {
                 <li><span className="socket" data-state="applied" aria-hidden="true" /> подключён: проект видит общую папку скилла</li>
                 <li><span className="socket" data-state="pending" aria-hidden="true" /> в списке проекта, ссылки ещё создаются</li>
                 <li><span className="socket" data-state="conflict" aria-hidden="true"><span className="socket-mark">!</span></span> в списке, но место занято чужим содержимым</li>
+                <li><span className="socket" data-state="unavailable" aria-hidden="true" /> в списке, но папка проекта недоступна</li>
                 <li><span className="socket" data-state="none" aria-hidden="true" /> не подключён</li>
               </ul>
               <p>Правка скилла через любой проект сразу видна во всех проектах этого компьютера. Список скиллов
