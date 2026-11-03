@@ -215,13 +215,3 @@ link_version() {
     done
     return "$errors"
 }
-
-install_registry() {
-    local name names errors=0
-    names=$(skill_names) || return 1
-    while IFS= read -r name; do
-        [[ -n "$name" ]] || continue
-        link_version "$name" || errors=1
-    done <<< "$names"
-    return "$errors"
-}
