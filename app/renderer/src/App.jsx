@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CELL_TEXT, basename, buildMatrix, cellOf, conflictSkills, globalCaption, parent, problems } from './model.js';
 import Resolver from './Resolver.jsx';
+import mark from '../../../assets/brand/skillarium-icon.svg';
 
 const api = window.skills;
 
@@ -75,7 +76,8 @@ function SyncBanner({ sync, busy, onOpen }) {
 function Setup({ library, onChoose }) {
   return (
     <main className="setup">
-      <h1>Скиллы в проектах</h1>
+      <img className="mark" src={mark} alt="" />
+      <h1>skill<span>arium</span></h1>
       <p>В папке {library.path} нет библиотеки скиллов. Укажите рабочую копию agent-skills: в ней лежат sources.json и папка skills.</p>
       <button type="button" className="primary" onClick={onChoose}>Выбрать папку библиотеки</button>
     </main>
@@ -171,11 +173,17 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div className="title">
-          <h1>Скиллы в проектах</h1>
-          <p className="library">
-            Библиотека: <span title={library.path}>{library.path}</span>
-            <button type="button" className="quiet" onClick={chooseLibrary}>Сменить</button>
-          </p>
+          <img className="mark" src={mark} alt="" />
+          <div className="title-text">
+            <div className="wordmark">
+              <h1>skill<span>arium</span></h1>
+              <span className="section">Скиллы в проектах</span>
+            </div>
+            <p className="library">
+              Библиотека: <span title={library.path}>{library.path}</span>
+              <button type="button" className="quiet" onClick={chooseLibrary}>Сменить</button>
+            </p>
+          </div>
         </div>
         <div className="actions">
           {busy && <span className="working" role="status">Применяю…</span>}

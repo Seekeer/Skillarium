@@ -84,8 +84,9 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 480,
-    title: 'Скиллы в проектах',
-    backgroundColor: '#eef1f4',
+    title: 'Skillarium — скиллы в проектах',
+    backgroundColor: '#f4f5fb',
+    icon: path.join(__dirname, '..', '..', 'assets', 'brand', 'png', 'skillarium-icon-256.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

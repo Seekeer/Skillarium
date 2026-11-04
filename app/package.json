@@ -1,6 +1,6 @@
 {
   "name": "agent-skills-app",
-  "productName": "Agent skills",
+  "productName": "Skillarium",
   "private": true,
   "version": "0.1.0",
   "description": "Local app: connect shared library skills to project folders",
@@ -11,6 +11,9 @@
     "test": "vite build && playwright test"
   },
   "devDependencies": {
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/unbounded": "^5.2.8",
     "@playwright/test": "^1.56.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "^45.2.1",
