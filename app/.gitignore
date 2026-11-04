@@ -1,0 +1,5 @@
+# Library sync publishes only skills/; keep build output out of the checkout's status.
+node_modules/
+dist/
+test-results/
+playwright-report/

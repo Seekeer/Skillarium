@@ -125,10 +125,10 @@ class ProjectBindingTests(unittest.TestCase):
             return self.run_client('install', '--link-only', expected=expected)
         return self.run_client('install', '-Mode', 'Link', expected=expected)
 
-    def publish(self):
+    def publish(self, expected=0):
         """Library Git synchronization without touching any scheduler."""
         if CLIENT == 'bash':
-            return self.run_client('install', '--sync-only')
+            return self.run_client('install', '--sync-only', expected=expected)
         harness = self.root / 'publish.ps1'
         harness.write_text(
             "$ErrorActionPreference = 'Stop'\n$repo = $args[0]\n"
@@ -138,7 +138,9 @@ class ProjectBindingTests(unittest.TestCase):
             ". (Join-Path $repo 'scripts/client.ps1')\nSync-Repository\n")
         result = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                                  '-File', str(harness), str(self.library)], env=self.env, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stdout.decode('utf-8', 'replace') + result.stderr.decode('utf-8', 'replace'))
+        output = result.stdout.decode('utf-8', 'replace') + result.stderr.decode('utf-8', 'replace')
+        self.assertEqual(result.returncode != 0, expected != 0, output)
+        return output
 
     def json_output(self):
         lines = [line for line in self.last_stdout.splitlines() if line.startswith('{')]
@@ -521,6 +523,111 @@ class ProjectBindingTests(unittest.TestCase):
         state = Path(self.status()['state'])
         self.assertTrue(state.is_file())
         self.assertFalse(same_path(os.path.commonpath([state, self.library]), self.library))
+
+    # 13 ----------------------------------------------------------------------
+    def write_skill(self, folder, body):
+        (folder / 'SKILL.md').write_text(f'---\nname: {SHARED}\ndescription: Test\n---\n{body}\n',
+                                         encoding='utf-8', newline='\n')
+
+    def conflicting_edits(self):
+        """A teammate and this computer change the same line; the teammate deletes a file edited here."""
+        seed = self.root / 'seed'
+        skill = seed / 'skills' / SHARED
+        (skill / 'notes.md').write_text('notes\n', newline='\n')
+        self.commit(seed, 'Teammate notes')
+        self.git(seed, 'push')
+        self.publish()
+        self.write_skill(skill, 'Teammate edit')
+        (skill / 'notes.md').unlink()
+        self.commit(seed, 'Teammate edit')
+        self.git(seed, 'push')
+        local = self.library / 'skills' / SHARED
+        self.write_skill(local, 'Моя правка')
+        (local / 'notes.md').write_text('local notes\n', newline='\n')
+        self.publish(expected=1)
+
+    def hosting(self):
+        protect(self.remote)
+        host = FakeHosting(self.remote, self.env)
+        self.addCleanup(host.stop)
+        self.git(self.library, 'config', 'agent-skills.machine', 'bindings-test')
+        self.git(self.library, 'config', 'agent-skills.api', host.api)
+        self.git(self.library, 'config', 'credential.helper',
+                 '!f() { echo username=test; echo password=secret; }; f')
+        return host
+
+    def conflicts(self):
+        self.projects('conflicts')
+        return self.json_output()
+
+    def resolve(self, request, expected=0):
+        path = self.root / 'request.json'
+        path.write_text(json.dumps(request, ensure_ascii=False), encoding='utf-8')
+        return self.projects('resolve', path, expected=expected)
+
+    def worktrees(self):
+        return self.git(self.library, 'worktree', 'list', '--porcelain').count('worktree ')
+
+    def test_sync_conflict_is_listed_and_resolved_without_losing_either_side(self):
+        self.assertEqual(self.conflicts(), {'state': 'ok', 'upstream': None, 'files': []})
+        self.conflicting_edits()
+        self.hosting()
+        # Users may have no Git identity; the trial merge must not need one.
+        for key in ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']:
+            self.env.pop(key)
+        before = self.git(self.library, 'rev-parse', 'HEAD')
+        report = self.conflicts()
+        self.assertEqual(report['state'], 'conflict')
+        files = {item['path']: item for item in report['files']}
+        skill_md, notes = f'skills/{SHARED}/SKILL.md', f'skills/{SHARED}/notes.md'
+        self.assertEqual(sorted(files), [skill_md, notes])
+        self.assertEqual(files[skill_md]['skill'], SHARED)
+        self.assertIn('Моя правка', files[skill_md]['mine']['text'])
+        self.assertIn('Teammate edit', files[skill_md]['library']['text'])
+        self.assertEqual(files[notes]['mine']['text'], 'local notes\n')
+        self.assertIsNone(files[notes]['library'])
+        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), before)
+        self.assertEqual(self.worktrees(), 1)
+
+        # An edit made after the report makes the choice stale; nothing is merged.
+        local = self.library / 'skills' / SHARED
+        self.write_skill(local, 'Моя правка\nЕщё строка')
+        request = {'upstream': report['upstream'], 'files': [
+            {'path': path, 'take': 'library', 'mine': item['mine'] and item['mine']['id'],
+             'library': item['library'] and item['library']['id']} for path, item in files.items()]}
+        self.resolve(request, expected=5)
+        self.assertIn('Ещё строка', (local / 'SKILL.md').read_text(encoding='utf-8'))
+        self.assertTrue((local / 'notes.md').exists())
+
+        report = self.conflicts()
+        files = {item['path']: item for item in report['files']}
+        self.assertIn('Ещё строка', files[skill_md]['mine']['text'])
+        edited = f'---\nname: {SHARED}\ndescription: Test\n---\nОбщая версия\n'
+        request = {'upstream': report['upstream'], 'files': [
+            {'path': skill_md, 'take': 'edited', 'text': 'Общая версия без заголовка\n',
+             'mine': files[skill_md]['mine']['id'], 'library': files[skill_md]['library']['id']},
+            {'path': notes, 'take': 'library', 'mine': files[notes]['mine']['id'], 'library': None}]}
+        # A result that is no longer a valid skill is refused before anything is merged.
+        head = self.git(self.library, 'rev-parse', 'HEAD')
+        self.assertIn('needs frontmatter', self.resolve(request, expected=1))
+        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(self.worktrees(), 1)
+        request['files'][0]['text'] = edited
+        output = self.resolve(request)
+        # The resolution travels like any client edit: a proposal pull request merged by the hosting.
+        self.assertEqual(self.json_output(), {'resolved': True, 'published': True}, output)
+        self.assertEqual((local / 'SKILL.md').read_bytes(), edited.encode())
+        self.assertFalse((local / 'notes.md').exists())
+        self.assertEqual(self.conflicts()['state'], 'ok')
+        self.assertEqual(self.git(self.library, 'status', '--porcelain'), '')
+        self.assertEqual(len(self.git(self.library, 'rev-list', '--parents', '-n', '1', 'HEAD').split()), 3)
+        self.assertEqual(self.worktrees(), 1)
+        published = subprocess.run(['git', '-C', str(self.remote), 'show', f'main:{skill_md}'], env=self.env,
+                                   capture_output=True, check=True).stdout
+        self.assertEqual(published, edited.encode())
+        self.publish()
+        self.assertEqual(self.git(self.library, 'rev-parse', 'HEAD'), self.git(self.library, 'rev-parse', '@{upstream}'))
+        self.assert_global(True)
 
 
 if __name__ == '__main__':

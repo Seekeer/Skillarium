@@ -282,7 +282,13 @@ function Invoke-Api {
         $uri = [Uri]$base
         $authority = $uri.Authority
         $request = "protocol=$($uri.Scheme)`nhost=$authority`n`n"
-        $output = $request | & git -C $repo -c credential.interactive=false credential fill 2>$null
+        # A console input encoding with a BOM (Windows "UTF-8 for worldwide language support")
+        # prefixes piped input with it, and Git then sees no protocol field.
+        $inputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+            $output = $request | & git -C $repo -c credential.interactive=false credential fill 2>$null
+        } finally { [Console]::InputEncoding = $inputEncoding }
         $values = @{}
         foreach ($line in @($output)) { if ($line -match '^([^=]+)=(.*)$') { $values[$Matches[1]] = $Matches[2] } }
         if ($LASTEXITCODE -ne 0 -or -not $values['password']) { throw 'Hosting credentials are unavailable; publication pending.' }
@@ -631,4 +637,159 @@ function Resolve-Update {
     }
     Approve-Proposal -Name $Name -Branch $proposal.Branch -Head $head -Result $target -Incoming (Get-Trailer $proposal.Message 'Incoming-Tree')
     if ($Strategy -eq 'merged') { Invoke-Git -GitArgs @('worktree', 'remove', '--force', $worktree) | Out-Null }
+}
+
+# --- Stopped synchronization: shown and resolved by the "Projects" UI ---------
+
+function Get-GitBlob {
+    param([string]$Id)
+    if ($Id -cnotmatch '^[0-9a-f]{40}([0-9a-f]{24})?$') { throw 'Invalid Git object id.' }
+    $info = New-Object Diagnostics.ProcessStartInfo 'git'
+    $info.Arguments = "cat-file blob $Id"
+    $info.WorkingDirectory = $repo
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $buffer = New-Object IO.MemoryStream
+    try {
+        $process.StandardOutput.BaseStream.CopyTo($buffer)
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "git failed (exit $($process.ExitCode))." }
+        return ,$buffer.ToArray()
+    } finally { $buffer.Dispose(); $process.Dispose() }
+}
+
+function Get-GitObjectId {
+    param([string]$Revision, [string]$Path)
+    $id = & git -C $repo rev-parse --verify --quiet "${Revision}:$Path"
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return [string]$id
+}
+
+function ConvertTo-ConflictSide {
+    param([byte[]]$Bytes, [string]$Id)
+    $text = $null
+    if ([Array]::IndexOf($Bytes, [byte]0) -lt 0) {
+        try { $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($Bytes) } catch { $text = $null }
+    }
+    return [ordered]@{id = $Id; binary = ($null -eq $text); text = $text}
+}
+
+function Get-DivergedRevisions {
+    if (@(Invoke-Git -GitArgs @('remote')) -notcontains 'origin') { return $null }
+    & git -C $repo symbolic-ref -q HEAD | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $upstream = & git -C $repo rev-parse --verify --quiet '@{upstream}'
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $head = Invoke-Git -GitArgs @('rev-parse', 'HEAD')
+    foreach ($pair in @(@($upstream, $head), @($head, $upstream))) {
+        & git -C $repo merge-base --is-ancestor $pair[0] $pair[1]
+        if ($LASTEXITCODE -eq 0) { return $null }
+    }
+    return @([string]$head, [string]$upstream)
+}
+
+# Repeats the merge of Reconcile-Repository in a disposable worktree and passes its unmerged paths to $Then.
+function Invoke-TrialMerge {
+    param([string]$Head, [string]$Upstream, [scriptblock]$Then)
+    $temporary = Join-Path (Invoke-Git -GitArgs @('rev-parse', '--absolute-git-dir')) ('client-merge-' + [Guid]::NewGuid().ToString('N'))
+    # No stderr redirection: Windows PowerShell turns redirected native stderr into errors.
+    & git -C $repo worktree add --quiet --detach $temporary $Head | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare a trial merge.' }
+    try {
+        $hooks = Join-Path $temporary '.empty-hooks'
+        [IO.Directory]::CreateDirectory($hooks) | Out-Null
+        & git -C $temporary -c user.name=agent-skills -c user.email=agent-skills@localhost -c "core.hooksPath=$hooks" merge --quiet --no-commit --no-ff $Upstream | Out-Null
+        $merged = $LASTEXITCODE -eq 0
+        $paths = @(((& git -C $temporary diff --name-only -z --diff-filter=U) -join "`n").Split([char]0) | Where-Object { $_ })
+        if (-not $merged -and -not $paths.Count) { throw 'Trial merge failed without conflicts.' }
+        return & $Then $temporary $hooks $paths
+    } finally { Invoke-Git -GitArgs @('worktree', 'remove', '--force', $temporary) | Out-Null }
+}
+
+# The local side is the working tree: the next synchronization commits it first.
+function Invoke-Conflicts {
+    $revisions = Get-DivergedRevisions
+    $files = @()
+    if ($revisions) {
+        $paths = Invoke-TrialMerge -Head $revisions[0] -Upstream $revisions[1] -Then { param($worktree, $hooks, $paths) return ,$paths }
+        foreach ($path in $paths) {
+            if ($path -cnotmatch '^skills/([a-z0-9]+(?:-[a-z0-9]+)*)/') { throw "Conflict outside skills/ needs manual Git resolution: $path" }
+            $skill = $Matches[1]
+            $mine = $null
+            $full = Join-Path $repo $path
+            if (Test-Path -LiteralPath $full -PathType Leaf) {
+                $id = [string](Invoke-Git -GitArgs @('hash-object', '--no-filters', '--', $path))
+                $mine = ConvertTo-ConflictSide -Bytes ([IO.File]::ReadAllBytes($full)) -Id $id
+            }
+            $library = $null
+            $id = Get-GitObjectId -Revision $revisions[1] -Path $path
+            if ($id) { $library = ConvertTo-ConflictSide -Bytes (Get-GitBlob -Id $id) -Id $id }
+            $files += [ordered]@{path = $path; skill = $skill; mine = $mine; library = $library}
+        }
+    }
+    $state = 'ok'
+    if ($files.Count) { $state = 'conflict' }
+    $upstream = $null
+    if ($revisions) { $upstream = $revisions[1] }
+    Write-Json ([ordered]@{state = $state; upstream = $upstream; files = $files})
+    return 0
+}
+
+# Request: {upstream, files: [{path, take: mine|library|edited, mine, library, text}]}, where mine and
+# library are the object ids that were shown. The merge is published like any client edit, through
+# the proposal pull request. Exit 5: the conflict changed and nothing was merged.
+function Invoke-Resolve {
+    param([string]$RequestPath)
+    $request = Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $env:GCM_INTERACTIVE = 'Never'
+    if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
+    Assert-AutomaticCommits
+    Publish-LocalChanges
+    $revisions = Get-DivergedRevisions
+    if (-not $revisions -or $revisions[1] -cne [string]$request.upstream) { Write-Warning 'The library changed; review the conflict again.'; return 5 }
+    $choices = @{}
+    foreach ($file in @($request.files)) { $choices[[string]$file.path] = $file }
+    $merged = Invoke-TrialMerge -Head $revisions[0] -Upstream $revisions[1] -Then {
+        param($worktree, $hooks, $paths)
+        if ((@($paths | Sort-Object -CaseSensitive) -join "`n") -cne (@($choices.Keys | Sort-Object -CaseSensitive) -join "`n")) { return $null }
+        foreach ($path in $paths) {
+            $choice = $choices[$path]
+            $mineId = Get-GitObjectId -Revision $revisions[0] -Path $path
+            $libraryId = Get-GitObjectId -Revision $revisions[1] -Path $path
+            if ([string]$choice.mine -cne [string]$mineId -or [string]$choice.library -cne [string]$libraryId) { return $null }
+            $bytes = $null
+            switch -CaseSensitive ([string]$choice.take) {
+                'mine' { if ($mineId) { $bytes = Get-GitBlob -Id $mineId } }
+                'library' { if ($libraryId) { $bytes = Get-GitBlob -Id $libraryId } }
+                'edited' {
+                    if ($null -eq $choice.text) { throw "No edited text: $path" }
+                    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes([string]$choice.text)
+                }
+                default { throw "Unknown choice for $path." }
+            }
+            $target = Join-Path $worktree $path
+            if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }
+            if ($null -ne $bytes) {
+                [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
+                [IO.File]::WriteAllBytes($target, $bytes)
+            }
+            # A hand-edited result must still be a valid skill; nothing is merged otherwise.
+            if ($path -cmatch '^skills/([^/]+)/SKILL\.md$' -and (Test-Path -LiteralPath $target)) { Assert-SkillText -Name $Matches[1] -Path $target }
+            Invoke-Git -Directory $worktree -GitArgs @('add', '-A', '--', ":(literal)$path") | Out-Null
+        }
+        if (@(& git -C $worktree diff --name-only --diff-filter=U).Count) { throw 'Unresolved files remain; nothing merged.' }
+        Invoke-ServiceGit -Directory $worktree -GitArgs @('-c', "core.hooksPath=$hooks", 'commit', '-q', '--no-edit', '-m',
+            "Resolve shared skill edits`n`nAgent-Skills-Client: 1") | Out-Null
+        return [string](Invoke-Git -Directory $worktree -GitArgs @('rev-parse', 'HEAD'))
+    }
+    if (-not $merged) { Write-Warning 'The conflict changed; review it again.'; return 5 }
+    Invoke-Git -GitArgs @('merge', '-q', '--ff-only', '--no-overwrite-ignore', $merged) | Out-Null
+    $published = $true
+    try { Publish-Proposal | Out-Null }
+    catch { $published = $false; Write-Warning "$($_.Exception.Message) The next synchronization retries it." }
+    if (-not (Sync-Bindings)) { Write-Warning 'Some skill links need attention; see status.' }
+    Write-Json ([ordered]@{resolved = $true; published = $published})
+    return 0
 }
