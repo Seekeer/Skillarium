@@ -15,7 +15,7 @@ from fake_hosting import FakeHosting, protect
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ('install.sh', 'install.ps1', 'scripts/client.sh', 'scripts/client.ps1', 'scripts/sync-hidden.vbs',
-          'scripts/locate.sh', 'scripts/locate.ps1',
+          'scripts/locate.sh', 'scripts/locate.ps1', 'scripts/bridge.sh', 'scripts/bridge.ps1',
           'projects.sh', 'projects.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
           'README.md', '.gitattributes', '.gitignore', '.agent-skills-client.json')
 HAS_BASH_CLIENT = os.name != 'nt' and all(shutil.which(tool) for tool in ('bash', 'jq', 'flock', 'curl'))
@@ -37,7 +37,9 @@ class Library:
                         GIT_CONFIG_GLOBAL=str(self.root / 'global.gitconfig'), GIT_CONFIG_NOSYSTEM='1',
                         GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
                         GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid',
-                        GIT_TERMINAL_PROMPT='0', PYTHONIOENCODING='utf-8')
+                        GIT_TERMINAL_PROMPT='0', PYTHONIOENCODING='utf-8',
+                        # Legacy-layout syncs would install Skillarium from GitHub; tests/test_bridge.py covers it.
+                        SKILLARIUM_NO_BRIDGE='1')
         self.upstream = self.root / 'upstream'
         self.upstream.mkdir()
         self.git(self.upstream, 'init', '-q', '-b', 'main')

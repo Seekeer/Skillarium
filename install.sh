@@ -59,21 +59,22 @@ if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
 # Global links and registered project bindings follow the local choices.
 { load_bindings && apply_bindings; } || result=1
 if ((result)); then exit "$result"; fi
-if [[ "$mode" != --install ]]; then exit 0; fi
+if [[ "$mode" != --install && "$mode" != --sync-only ]]; then exit 0; fi
 
+# Legacy layout (this engine inside the library): once Skillarium is installed, the timer
+# runs its current engine instead, and the engine files can leave the library.
+runner=$engine
+if [[ "$engine" == "$repo" && -z "${SKILLARIUM_NO_BRIDGE:-}" ]]; then
+    source "$engine/scripts/bridge.sh"
+    if bridged=$(skillarium_bridge "$repo"); then runner=$bridged; fi
+fi
 # Quote systemd ExecStart syntax, including its percent and dollar expansion.
 # The engine runs the library given here; the legacy layout keeps its old line.
-exec_start="/usr/bin/bash $(unit_quote "$engine/install.sh")"
-if [[ "$engine" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi
+exec_start="/usr/bin/bash $(unit_quote "$runner/install.sh")"
+if [[ "$runner" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi
 exec_start+=' --sync-only'
-for unit in agent-skills.service agent-skills.timer; do
-    if [[ -e "$unit_dir/$unit" ]] &&
-        [[ $(head -n 1 "$unit_dir/$unit") != '# Managed by agent-skills' ]]; then
-        echo "Existing unmanaged unit preserved: $unit_dir/$unit" >&2; exit 1
-    fi
-done
-mkdir -p -- "$unit_dir"
-cat >"$unit_dir/agent-skills.service" <<EOF
+write_service() {
+    cat >"$unit_dir/agent-skills.service" <<EOF
 # Managed by agent-skills
 [Unit]
 Description=Synchronize personal agent skills
@@ -82,6 +83,24 @@ Type=oneshot
 ExecStart=$exec_start
 TimeoutStartSec=5min
 EOF
+}
+if [[ "$mode" == --sync-only ]]; then
+    # Scheduled runs move an existing managed timer to the bridged engine, nothing else.
+    service="$unit_dir/agent-skills.service"
+    if [[ -f "$service" && $(head -n 1 "$service") == '# Managed by agent-skills' ]] &&
+        ! grep -qxF "ExecStart=$exec_start" "$service"; then
+        write_service && systemctl --user daemon-reload && echo "Hourly sync now runs $runner"
+    fi
+    exit 0
+fi
+for unit in agent-skills.service agent-skills.timer; do
+    if [[ -e "$unit_dir/$unit" ]] &&
+        [[ $(head -n 1 "$unit_dir/$unit") != '# Managed by agent-skills' ]]; then
+        echo "Existing unmanaged unit preserved: $unit_dir/$unit" >&2; exit 1
+    fi
+done
+mkdir -p -- "$unit_dir"
+write_service
 cat >"$unit_dir/agent-skills.timer" <<'EOF'
 # Managed by agent-skills
 [Unit]

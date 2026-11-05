@@ -1,5 +1,7 @@
 # Isolated integration check: no real skills, credentials, or user task.
 $ErrorActionPreference = 'Stop'
+# Legacy-layout syncs would install Skillarium from GitHub; tests/test_bridge.py covers it.
+$env:SKILLARIUM_NO_BRIDGE = '1'
 $root = Split-Path $PSScriptRoot -Parent
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('agent skills ' + [Guid]::NewGuid().ToString('N'))
 $taskName = 'AgentSkills-Test-' + [Guid]::NewGuid().ToString('N')

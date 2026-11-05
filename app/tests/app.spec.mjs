@@ -12,7 +12,8 @@ const repo = path.resolve(appDir, '..');
 const windows = process.platform === 'win32';
 const CLIENT_FILES = ['install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', '.gitattributes',
   'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
-  'scripts/sync-hidden.vbs', 'scripts/locate.sh', 'scripts/locate.ps1', 'agent-skills.json'];
+  'scripts/sync-hidden.vbs', 'scripts/locate.sh', 'scripts/locate.ps1', 'scripts/bridge.sh', 'scripts/bridge.ps1',
+  'agent-skills.json'];
 const SHARED = 'shared-skill';
 const OTHER = 'other-skill';
 
@@ -40,6 +41,7 @@ function makeFixture() {
     XDG_CONFIG_HOME: path.join(home, '.config'),
     GIT_CONFIG_GLOBAL: windows ? 'NUL' : '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
+    SKILLARIUM_NO_BRIDGE: '1',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
     GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid',
   };

@@ -75,14 +75,22 @@ try {
     if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -in @('Install', 'Sync')) {
-        $launcher = Join-Path $engine 'scripts\sync-hidden.vbs'
+        # Legacy layout (this engine inside the library): once Skillarium is installed, the task
+        # runs its current engine instead, and the engine files can leave the library.
+        $runner = $engine
+        if ((Get-LongPath $engine) -eq $repo -and -not $env:SKILLARIUM_NO_BRIDGE) {
+            . (Join-Path $engine 'scripts\bridge.ps1')
+            $bridged = Install-SkillariumBridge -Library $repo
+            if ($bridged) { $runner = $bridged }
+        }
+        $launcher = Join-Path $runner 'scripts\sync-hidden.vbs'
         $hostPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
         if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
             throw 'Windows Script Host is required for background synchronization.'
         }
         # The engine runs the library given here; the legacy layout keeps its old arguments.
         $taskArguments = "//B //NoLogo `"$launcher`""
-        if ((Get-LongPath $engine) -ne $repo) { $taskArguments += " `"$repo`"" }
+        if ((Get-LongPath $runner) -ne $repo) { $taskArguments += " `"$repo`"" }
         $action = New-ScheduledTaskAction -Execute $hostPath -Argument $taskArguments -WorkingDirectory $repo
     }
     if ($Mode -eq 'Install') {

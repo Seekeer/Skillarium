@@ -2,6 +2,8 @@
 # Uses actual junctions and Task Scheduler; never substitutes their implementations.
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows is required.' }
+# Legacy-layout syncs would install Skillarium from GitHub; tests/test_bridge.py covers it.
+$env:SKILLARIUM_NO_BRIDGE = '1'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 # A unique task name keeps an existing installation of this account untouched.
 $scheduledName = 'AgentSkills-Test-' + [Guid]::NewGuid().ToString('N')
@@ -43,7 +45,7 @@ try {
     $env:GIT_AUTHOR_NAME = $env:GIT_COMMITTER_NAME = 'agent-skills-test'
     $env:GIT_AUTHOR_EMAIL = $env:GIT_COMMITTER_EMAIL = 'test@example.invalid'
 
-    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/locate.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
+    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/locate.ps1', 'scripts/bridge.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
         $source = Join-Path $projectRoot $relative
