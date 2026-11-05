@@ -126,7 +126,8 @@ function Read-Feed {
     } else {
         $url = "$releases/latest/download/latest.json"
     }
-    $feed = Invoke-RestMethod -UseBasicParsing -Uri $url
+    $document = [string](Invoke-WebRequest -UseBasicParsing -Uri $url).Content
+    $feed = $document | ConvertFrom-Json
     $entry = $feed.engine.windows
     if ([string]$feed.version -notmatch $versionPattern -or -not $entry -or
         [string]$entry.sha512 -notmatch '^[0-9a-f]{128}$' -or $null -eq $feed.format.max) {
@@ -134,7 +135,7 @@ function Read-Feed {
     }
     $min = if ($null -ne $feed.format.min) { [int]$feed.format.min } else { 1 }
     return [pscustomobject]@{ Version = [string]$feed.version; Min = $min; Max = [int]$feed.format.max
-        Url = [string]$entry.url; Sha512 = [string]$entry.sha512; Size = [long]$entry.size }
+        Url = [string]$entry.url; Sha512 = [string]$entry.sha512; Size = [long]$entry.size; Document = $document }
 }
 
 function Test-Compatible {
@@ -171,6 +172,8 @@ function Get-Release {
         if (-not (Test-Path -LiteralPath $unpacked) -or (Get-Content -LiteralPath $unpacked -Raw).Trim() -ne $Feed.Version) {
             throw "Broken archive: $($Feed.Url)"
         }
+        # The feed stays with the version, like on Linux.
+        Write-Text (Join-Path $engine 'release.json') $Feed.Document
         if (Test-Path -LiteralPath $target) { [IO.Directory]::Delete($target, $true) }
         [IO.Directory]::Move($engine, $target)
     } finally {

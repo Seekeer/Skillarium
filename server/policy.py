@@ -108,6 +108,42 @@ def check_skill(repo, head, name):
     return errors
 
 
+def pin_only(repo, config, head):
+    """True when the configuration change touches nothing but policy_engine."""
+    try:
+        after = json.loads(blob(repo, head, hosting.CONFIG).decode('utf-8'))
+    except (ValueError, AttributeError):
+        return False
+    before = dict(config)
+    return {key: value for key, value in before.items() if key != 'policy_engine'} == \
+        {key: value for key, value in after.items() if key != 'policy_engine'} and \
+        before.get('policy_engine') != after.get('policy_engine')
+
+
+def pinned_policy(repo, config, server, changed, history, base, head):
+    """The assigned server moves the pinned policy release forward, nothing else."""
+    errors = []
+    if changed != [hosting.CONFIG]:
+        errors.append('The policy engine must be pinned in a separate pull request')
+    if not server:
+        return errors + ['No server is assigned in main; the policy engine cannot change'], []
+    try:
+        new = hosting.policy_engine(hosting.shared_config(repo, head))
+        old = hosting.policy_engine(config)
+    except ValueError as error:
+        return errors + [str(error)], []
+    if new is None:
+        errors.append('The policy engine cannot be unpinned')
+    elif old is not None and hosting.version_key(new['version']) <= hosting.version_key(old['version']):
+        errors.append(f'The policy engine only moves forward (pinned {old["version"]})')
+    author = hosting.service_author(server)
+    touching = [item for item in history
+                if tree_id(repo, item['revision'], hosting.CONFIG) != tree_id(repo, item['parent'] or base, hosting.CONFIG)]
+    if not touching or any(item['author'] != author for item in touching):
+        errors.append(f'The policy engine is pinned only by the assigned server {author}')
+    return errors, [f'Policy engine pinned by {author}']
+
+
 def evaluate(repo, base, head):
     """Return (errors, notes) for merging head into base."""
     errors, notes = [], []
@@ -125,6 +161,8 @@ def evaluate(repo, base, head):
     if not changed:
         return errors, ['No changes']
     history = commits(repo, base, head)
+    if hosting.CONFIG in changed and config is not None and pin_only(repo, config, head):
+        return pinned_policy(repo, config, server, changed, history, base, head)
     if hosting.CONFIG in changed:
         if changed != [hosting.CONFIG]:
             errors.append('Server assignment must be changed in a separate administrative pull request')

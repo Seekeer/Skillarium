@@ -178,6 +178,7 @@ read_feed() {
     IFS=$'\t' read -r f_version f_min f_max f_url f_sha f_size < <(feed_fields <<<"$document") ||
         die "invalid release feed: $url"
     valid_version "$f_version" || die "invalid version in the feed: $f_version"
+    f_document=$document
     [[ "$f_min" =~ ^[1-9][0-9]*$ && "$f_max" =~ ^[1-9][0-9]*$ && "$f_size" =~ ^[0-9]+$ && "$f_sha" =~ ^[0-9a-f]{128}$ ]] ||
         die "invalid release feed: $url"
 }
@@ -216,6 +217,8 @@ fetch_version() {
         [[ "$(tr -d '[:space:]' <"$incoming/engine/VERSION")" != "$f_version" ]]; then
         rm -rf -- "$incoming"; die "broken archive: $f_url"
     fi
+    # The feed stays with the version: the server pins the library's PR check to it.
+    echo "$f_document" >"$incoming/engine/release.json"
     rm -rf -- "$target"
     mv -- "$incoming/engine" "$target"
     rm -rf -- "$incoming"

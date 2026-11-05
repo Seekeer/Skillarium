@@ -543,6 +543,27 @@ def resolve(repo, name, strategy, shared_hash, revision=None, commit=None):
     return result
 
 
+def pin_policy(repo, release):
+    """Server: pin the library's PR check to this engine's release (version, sha512)."""
+    ctx = Context(repo, need_server=True)
+    current = hosting.policy_engine(ctx.config)
+    wanted = dict(version=release['version'], sha512=release['engine']['linux']['sha512'])
+    if current == wanted:
+        print(f'Policy engine already pinned: {wanted["version"]}')
+        return 0
+    if current and hosting.version_key(current['version']) >= hosting.version_key(wanted['version']):
+        print(f'Policy engine {current["version"]} is not older than this engine {wanted["version"]}; unchanged')
+        return 0
+    config = json.loads(json.dumps(ctx.config))
+    config['policy_engine'] = wanted
+    tree = trees.edit(ctx.repo, ctx.tree(), blobs={hosting.CONFIG: (json.dumps(config, indent=2) + '\n').encode()})
+    branch = f'{SERVER_PREFIX}{ctx.machine}/policy-{wanted["version"]}'
+    head = ctx.commit(tree, f'Pin the library policy to Skillarium {wanted["version"]}', branch=branch)
+    ctx.publish(head, branch, f'Политика PR: Skillarium {wanted["version"]}',
+                'Проверка pull request будет запускать политику этого выпуска Skillarium (sha512 закреплён).')
+    return 0
+
+
 def assign_server(repo, machine):
     """Administrative operation: works without the previous server."""
     if not hosting.MACHINE.fullmatch(machine):

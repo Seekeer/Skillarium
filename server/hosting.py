@@ -87,6 +87,33 @@ def shared_config(repo, revision):
     return data
 
 
+VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?')
+SHA512 = re.compile(r'[0-9a-f]{128}')
+
+
+def version_key(text):
+    """Sort key of a release version by semantic version precedence."""
+    match = VERSION.fullmatch(text or '')
+    if not match:
+        raise ValueError(f'Invalid Skillarium version: {text!r}')
+    core = tuple(int(part) for part in match.groups()[:3])
+    if match[4] is None:
+        return core + ((1,),)
+    identifiers = tuple((0, int(item), '') if item.isdigit() else (1, 0, item) for item in match[4].split('.'))
+    return core + ((0,) + identifiers,)
+
+
+def policy_engine(config):
+    """The pinned policy release {version, sha512} of a configuration, or None."""
+    value = config.get('policy_engine') or {}
+    if not value.get('version') and not value.get('sha512'):
+        return None
+    version_key(value.get('version'))
+    if not SHA512.fullmatch(value.get('sha512') or ''):
+        raise ValueError('Invalid policy_engine sha512 in agent-skills.json')
+    return dict(version=value['version'], sha512=value['sha512'])
+
+
 def main_branch(config):
     return (config.get('publication') or {}).get('branch', 'main')
 

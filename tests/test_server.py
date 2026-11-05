@@ -269,6 +269,26 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(subprocess.run(['git', '-C', str(lib.remote), 'cat-file', 'blob', 'main:skills/my-local/run.ps1'],
                                         capture_output=True).stdout, b'Write-Output ok\r\n')
 
+    def test_server_pins_the_policy_engine_to_its_release(self):
+        lib = self.lib
+        release = lib.root / 'release.json'
+        def write(version):
+            release.write_text(json.dumps({'version': version, 'engine': {'linux': {'sha512': version[0] * 128}}}))
+        self.assertIn('not installed from a release', lib.manage('pin-policy'))
+        write('1.0.0')
+        lib.manage('pin-policy', '--release', str(release))
+        pinned = json.loads(lib.show('agent-skills.json'))['policy_engine']
+        self.assertEqual(pinned, {'version': '1.0.0', 'sha512': '1' * 128})
+        lib.pull(lib.server)
+        self.assertIn('already pinned', lib.manage('pin-policy', '--release', str(release)))
+        write('0.9.0')
+        self.assertIn('not older', lib.manage('pin-policy', '--release', str(release)))
+        self.assertEqual(json.loads(lib.show('agent-skills.json'))['policy_engine']['version'], '1.0.0')
+        laptop = lib.clone('laptop', 'laptop')
+        write('2.0.0')
+        self.assertIn('not the assigned server', lib.manage('pin-policy', '--release', str(release), repo=laptop,
+                                                            expected=1))
+
     def test_unassigned_machine_cannot_publish_server_changes(self):
         lib = self.lib
         other = lib.clone('other', 'laptop')

@@ -171,6 +171,12 @@ def dispatch(args):
             return maintenance.set_policy(repo, args.name, args.policy)
         if args.command == 'assign-server':
             return maintenance.assign_server(repo, args.machine)
+        if args.command == 'pin-policy':
+            release = args.release or ENGINE / 'release.json'
+            if not release.is_file():
+                print('This engine was not installed from a release; the policy engine stays as it is.')
+                return 0
+            return maintenance.pin_policy(repo, json.loads(release.read_text(encoding='utf-8')))
         if args.command == 'register':
             source = (dict(kind='git', url=args.git_url, path=str(Path(args.path).as_posix()), ref=args.ref)
                       if args.git_url else dict(kind='url', url=args.url))
@@ -184,7 +190,7 @@ def main():
                         help='Library working copy (default: SKILLARIUM_LIBRARY, this repository, the configured library)')
     parser.add_argument('--catalog', help='Compatibility: the only library is agent-skills')
     commands = parser.add_subparsers(dest='command', required=True)
-    names = ('status', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server',
+    names = ('status', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server', 'pin-policy',
              'register-local', 'import-local', 'deploy-client', 'client-manifest', 'absorb-updater')
     for command in names:
         sub = commands.add_parser(command)
@@ -208,6 +214,9 @@ def main():
             sub.add_argument('policy', choices=('auto', 'confirm'))
         if command == 'assign-server':
             sub.add_argument('machine')
+        if command == 'pin-policy':
+            sub.description = 'Pin the PR check of the library to the release of this engine (server).'
+            sub.add_argument('--release', type=Path, help='Release feed (default: release.json of this engine)')
         if command == 'register-local':
             sub.add_argument('name')
             sub.add_argument('--directory', type=Path, required=True)

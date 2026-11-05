@@ -9,3 +9,11 @@
 `format` в `agent-skills.json` поднимает только миграция Skillarium. Проверка
 pull request (`.gitea/workflows/policy.yml`) запускает политику выпуска,
 закреплённого в `policy_engine`.
+
+## Подключение машин
+
+Команды печатает и записывает сюда установщик сервера (`skillarium server`).
+Токен в команды не входит: установка спрашивает его сама.
+
+<!-- skillarium:clients -->
+<!-- /skillarium:clients -->

@@ -66,6 +66,42 @@ class PolicyTests(unittest.TestCase):
         self.commit_as('i3')
         self.assertEqual(self.evaluate(), [])
 
+    def pin(self, version, sha='a' * 128, **extra):
+        path = self.work / 'agent-skills.json'
+        config = json.loads(path.read_text())
+        config['policy_engine'] = dict(version=version, sha512=sha)
+        config.update(extra)
+        path.write_text(json.dumps(config, indent=2) + '\n')
+
+    def test_policy_engine_moves_forward_only_by_the_assigned_server(self):
+        self.pin('1.2.0')
+        self.commit_as('laptop', 'Pin by a client')
+        self.assertTrue(any('pinned only by the assigned server' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        self.pin('1.2.0')
+        self.commit_as('i3', 'Pin the policy')
+        self.assertEqual(self.evaluate(), [])
+        self.lib.git(self.lib.remote, 'update-ref', 'refs/heads/main', self.lib.git(self.work, 'rev-parse', 'HEAD'),
+                     env={'AGENT_SKILLS_FAKE_HOST': '1'})
+        self.lib.git(self.work, 'fetch', '-q', 'origin')
+        self.pin('1.1.9')
+        self.commit_as('i3', 'Downgrade')
+        self.assertTrue(any('only moves forward' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        self.pin('1.3.0-beta.1', sha='bad')
+        self.commit_as('i3', 'Broken pin')
+        self.assertTrue(any('sha512' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        # Any other configuration change stays an administrative operation.
+        self.pin('1.3.0', server={'machine': 'laptop'})
+        self.commit_as('i3', 'Pin and reassign')
+        self.assertTrue(any('assign-server' in e for e in self.evaluate()))
+
+    def test_version_precedence(self):
+        order = ['0.9.0', '1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta.2', '1.0.0-beta.11',
+                 '1.0.0-rc.1', '1.0.0', '1.0.1', '1.10.0']
+        self.assertEqual(sorted(order, key=hosting.version_key), order)
+
     def test_mixed_pull_request_checks_each_control_change(self):
         skill = self.work / 'skills/first-skill/SKILL.md'
         skill.write_text(skill.read_text() + '\nContent')
