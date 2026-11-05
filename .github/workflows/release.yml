@@ -1,0 +1,30 @@
+name: Release
+
+# A tag v<version> (matching app/package.json) publishes the engine archives
+# and the update feed latest.json. A version with a suffix (1.2.0-beta.1) is
+# a pre-release: the beta channel.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build engine archives and latest.json
+        run: python3 release/build_engine.py --version "${GITHUB_REF_NAME#v}" --out dist
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/skillarium-engine-*.tar.gz
+            dist/skillarium-engine-*.zip
+            dist/*.sha512
+            dist/latest.json

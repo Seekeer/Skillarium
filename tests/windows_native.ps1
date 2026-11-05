@@ -46,7 +46,9 @@ try {
     foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/locate.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
-        Copy-Item -LiteralPath (Join-Path $projectRoot $relative) -Destination $destination
+        $source = Join-Path $projectRoot $relative
+        if ($relative -eq 'agent-skills.json') { $source = Join-Path $projectRoot 'templates/library/agent-skills.json' }
+        Copy-Item -LiteralPath $source -Destination $destination
     }
     $installerText = [IO.File]::ReadAllText((Join-Path $seed 'install.ps1'))
     $installerText = $installerText.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $scheduledName + '"'))

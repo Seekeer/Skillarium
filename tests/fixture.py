@@ -52,7 +52,7 @@ class Library:
             (seed / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, seed / relative)
         (seed / 'sources.json').write_text('{"version": 2, "skills": {}}\n')
-        config = json.loads((ROOT / 'agent-skills.json').read_text())
+        config = json.loads((ROOT / 'templates/library/agent-skills.json').read_text())
         config['server']['machine'] = server_machine
         (seed / 'agent-skills.json').write_text(json.dumps(config, indent=2) + '\n')
         self.commit(seed, 'Library')

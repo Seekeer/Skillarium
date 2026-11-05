@@ -50,7 +50,8 @@ function makeFixture() {
   git(seed, env, 'init', '-b', 'main');
   for (const relative of CLIENT_FILES) {
     fs.mkdirSync(path.dirname(path.join(seed, relative)), { recursive: true });
-    fs.copyFileSync(path.join(repo, relative), path.join(seed, relative));
+    const source = relative === 'agent-skills.json' ? path.join(repo, 'templates', 'library', relative) : path.join(repo, relative);
+    fs.copyFileSync(source, path.join(seed, relative));
   }
   const registry = { version: 2, skills: {} };
   for (const name of [SHARED, OTHER]) {

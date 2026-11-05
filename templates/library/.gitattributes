@@ -1,0 +1,2 @@
+skills/** -text -filter -ident -working-tree-encoding
+upstream/** -text -filter -ident -working-tree-encoding

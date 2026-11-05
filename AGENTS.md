@@ -1,10 +1,12 @@
-# Agent Skills
+# Skillarium
 
-Единый репозиторий: библиотека `skills/<name>/`, реестр `sources.json`,
-общая конфигурация `agent-skills.json`, базы внешних версий `upstream/<name>/`,
-нативные клиенты (`install.sh`, `install.ps1`, `scripts/`) и сервер (`server/`).
-История прежнего agent-skills-updater присоединена; его `client/` больше не
-существует — корневые клиентские файлы и есть эталон.
+Репозиторий движка: нативные клиенты (`install.sh`, `install.ps1`,
+`scripts/`), сервер (`server/`), приложение (`app/`), шаблон библиотеки
+(`templates/library/`) и сборка выпусков (`release/`). Библиотека скиллов
+пользователя (`skills/<name>/`, `sources.json`, `agent-skills.json`,
+`upstream/<name>/`) — отдельный репозиторий; здесь её нет, тесты создают
+временные библиотеки из шаблона. История agent-skills и agent-skills-updater
+сохранена.
 
 Все автоматические публикации идут через ветки `agent-skills/...` и PR с
 автослиянием; прямой push в `main` запрещён. Правки скиллов принимаются от

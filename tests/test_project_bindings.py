@@ -68,7 +68,8 @@ class ProjectBindingTests(unittest.TestCase):
         self.git(seed, 'init', '-b', 'main')
         for relative in CLIENT_FILES:
             (seed / relative).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(ROOT / relative, seed / relative)
+            source = ROOT / 'templates/library' / relative if relative == 'agent-skills.json' else ROOT / relative
+            shutil.copyfile(source, seed / relative)
         self.registry = {'version': 2, 'skills': {}}
         for name in [SHARED, OTHER]:
             self.add_library_skill(seed, name)

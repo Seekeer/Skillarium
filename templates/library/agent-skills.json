@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "format": 1,
+  "server": {
+    "machine": null
+  },
+  "publication": {
+    "branch": "main",
+    "hosting": "gitea"
+  }
+}
