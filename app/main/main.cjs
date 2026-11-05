@@ -3,7 +3,9 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { engine, isLibrary, runProjects } = require('./backend.cjs');
+const { repositoryRoot, useEngine, isLibrary, runProjects, connect } = require('./backend.cjs');
+const { deployBundledEngine, channel } = require('./engine.cjs');
+const { startUpdates, updateState, checkNow, installNow } = require('./updates.cjs');
 
 const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -28,8 +30,14 @@ function engineConfig() {
 // Environment, the app's own choice (like --library), then the order of the native
 // scripts: an engine folder that is itself a library (legacy layout), the shared configuration.
 function library() {
+  const legacy = !app.isPackaged && isLibrary(repositoryRoot) ? repositoryRoot : '';
   return process.env.SKILLARIUM_LIBRARY || process.env.AGENT_SKILLS_LIBRARY || readSettings().library
-    || (isLibrary(engine) ? engine : '') || engineConfig().library || '';
+    || legacy || engineConfig().library || '';
+}
+
+function saveSettings(change) {
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
+  fs.writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), ...change }, null, 2));
 }
 
 function text(value) {
@@ -52,10 +60,34 @@ ipcMain.handle('choose-library', async () => {
   if (picked.canceled || !picked.filePaths.length) return null;
   const folder = picked.filePaths[0];
   if (!isLibrary(folder)) return { path: folder, valid: false };
-  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
-  fs.writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), library: folder }, null, 2));
+  saveSettings({ library: folder });
   return { path: folder, valid: true };
 });
+ipcMain.handle('default-folder', () => path.join(os.homedir(), 'Skillarium', 'library'));
+ipcMain.handle('choose-folder', async () => {
+  const picked = await dialog.showOpenDialog(window, { title: 'Куда положить библиотеку', properties: ['openDirectory', 'createDirectory'] });
+  return picked.canceled || !picked.filePaths.length ? null : picked.filePaths[0];
+});
+// First run: the same steps as `skillarium client`, without downloading the app again.
+ipcMain.handle('connect', async (_event, request) => {
+  const url = text(request?.url).trim();
+  const token = text(request?.token).trim();
+  const folder = text(request?.folder).trim();
+  if (!/^https?:\/\/[^\s@]+$/.test(url) || !path.isAbsolute(folder) || /\s/.test(token)) throw new Error('Invalid connection');
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'skillarium-connect-'));
+  try {
+    const tokenFile = path.join(temporary, 'token');
+    fs.writeFileSync(tokenFile, token, { mode: 0o600 });
+    const result = await connect(url, folder, tokenFile);
+    if (result.code === 0) saveSettings({ library: folder });
+    return { code: result.code, messages: result.messages };
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+ipcMain.handle('update-state', () => updateState());
+ipcMain.handle('check-update', () => checkNow());
+ipcMain.handle('install-update', () => installNow());
 ipcMain.handle('status', () => run('status'));
 ipcMain.handle('register', async () => {
   const picked = await dialog.showOpenDialog(window, { title: 'Папка проекта', properties: ['openDirectory'] });
@@ -98,7 +130,8 @@ function createWindow() {
     minHeight: 480,
     title: 'Skillarium — скиллы в проектах',
     backgroundColor: '#f4f5fb',
-    icon: path.join(__dirname, '..', '..', 'assets', 'brand', 'png', 'skillarium-icon-256.png'),
+    icon: app.isPackaged ? path.join(process.resourcesPath, 'icon.png')
+      : path.join(__dirname, '..', '..', 'assets', 'brand', 'png', 'skillarium-icon-256.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -110,5 +143,15 @@ function createWindow() {
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (app.isPackaged) {
+    // The app's own engine becomes current; a failed copy still runs it from resources.
+    const bundled = path.join(process.resourcesPath, 'engine');
+    let deployed = null;
+    try { deployed = deployBundledEngine(bundled); } catch (error) { console.error(error); }
+    useEngine(deployed || bundled);
+  }
+  createWindow();
+  startUpdates((state) => window?.webContents.send('update', state), channel());
+});
 app.on('window-all-closed', () => app.quit());

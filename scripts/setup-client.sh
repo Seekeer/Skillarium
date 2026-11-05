@@ -13,8 +13,9 @@ set -euo pipefail
 engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 usage='Usage: skillarium client --library <url> [--path <folder>] [--token-file <file>] [--machine <name>]
-                         [--no-app] [--no-timers] [--no-launch]'
+                         [--no-app] [--no-timers] [--no-launch] [--from-app]'
 library_url='' path="$HOME/Skillarium/library" token_file='' machine='' no_app=false no_timers=false no_launch=false
+from_app=false
 while (($#)); do
     case "$1" in
         --library) library_url=${2:?--library needs a URL}; shift 2 ;;
@@ -25,6 +26,8 @@ while (($#)); do
         --no-app) no_app=true; shift ;;
         --no-timers) no_timers=true; shift ;;
         --no-launch) no_launch=true; shift ;;
+        # Run by the app's first-run screen: the app is there and keeps the engine updated.
+        --from-app) from_app=true no_app=true no_launch=true; shift ;;
         -h|--help) echo "$usage"; exit 0 ;;
         *) echo "$usage" >&2; exit 2 ;;
     esac
@@ -122,7 +125,7 @@ if $no_timers; then
 else
     bash "$engine/install.sh" --library "$path" --install
     # Without the app nothing else updates the engine.
-    [[ -n "$app" ]] || bash "$engine/scripts/skillarium.sh" enable-updates
+    [[ -n "$app" ]] || $from_app || bash "$engine/scripts/skillarium.sh" enable-updates
 fi
 if [[ -n "$app" ]] && ! $no_launch && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
     nohup "$app" >/dev/null 2>&1 &

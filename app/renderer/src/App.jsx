@@ -73,14 +73,82 @@ function SyncBanner({ sync, busy, onOpen }) {
   );
 }
 
-function Setup({ library, onChoose }) {
+// First run: connect this machine to a library in Gitea, or point at an existing clone.
+function Connect({ library, onConnected, onChoose }) {
+  const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [folder, setFolder] = useState('');
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState(null);
+  useEffect(() => { api.defaultFolder().then((value) => setFolder((current) => current || value)); }, []);
+
+  async function submit(event) {
+    event.preventDefault();
+    setWorking(true);
+    setFailure(null);
+    try {
+      const result = await api.connect({ url, token, folder });
+      if (result.code === 0) {
+        setToken('');
+        onConnected();
+      } else {
+        setFailure(result.messages);
+      }
+    } catch (error) {
+      setFailure([String(error?.message || error)]);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function pickFolder() {
+    const picked = await api.chooseFolder();
+    if (picked) setFolder(picked);
+  }
+
   return (
     <main className="setup">
       <img className="brand-mark" src={mark} alt="" />
       <h1>skill<span>arium</span></h1>
-      <p>В папке {library.path} нет библиотеки скиллов. Укажите рабочую копию agent-skills: в ней лежат sources.json и папка skills.</p>
-      <button type="button" className="primary" onClick={onChoose}>Выбрать папку библиотеки</button>
+      {library.path
+        ? <p>В папке {library.path} нет библиотеки скиллов.</p>
+        : <p>Подключите этот компьютер к библиотеке скиллов. Адрес и токен даёт тот, кто ставил сервер библиотеки.</p>}
+      <form className="connect" onSubmit={submit} aria-label="Подключить библиотеку">
+        <label>Адрес библиотеки
+          <input type="url" required placeholder="https://gitea.example.org/owner/skills.git" value={url}
+            onChange={(event) => setUrl(event.target.value)} disabled={working} />
+        </label>
+        <label>Токен Gitea
+          <input type="password" required autoComplete="off" value={token}
+            onChange={(event) => setToken(event.target.value)} disabled={working} />
+        </label>
+        <label>Папка на этом компьютере
+          <span className="folder">
+            <input type="text" required value={folder} onChange={(event) => setFolder(event.target.value)} disabled={working} />
+            <button type="button" className="quiet" onClick={pickFolder} disabled={working}>Выбрать…</button>
+          </span>
+        </label>
+        <p className="sub">Токен сохраняется в хранилище учётных данных Git и больше нигде не записывается.</p>
+        <button type="submit" className="primary" disabled={working}>{working ? 'Подключаю…' : 'Подключить'}</button>
+      </form>
+      {failure && (
+        <div className="notice error" role="alert">
+          <p>Подключить библиотеку не удалось.</p>
+          {failure.length > 0 && <pre>{failure.join('\n')}</pre>}
+        </div>
+      )}
+      <button type="button" className="quiet" onClick={onChoose} disabled={working}>У меня уже есть клон — выбрать папку</button>
     </main>
+  );
+}
+
+function UpdateBanner({ update }) {
+  if (update?.state !== 'ready') return null;
+  return (
+    <div className="notice info" role="status" data-testid="update-ready">
+      <p>Загружена новая версия Skillarium {update.version}. Она установится при выходе из приложения.</p>
+      <button type="button" className="primary" onClick={() => api.installUpdate()}>Перезапустить и обновить</button>
+    </div>
   );
 }
 
@@ -93,6 +161,12 @@ export default function App() {
   const [removing, setRemoving] = useState(null);
   const [sync, setSync] = useState(null);
   const [resolving, setResolving] = useState(null);
+  const [update, setUpdate] = useState(null);
+
+  useEffect(() => {
+    api.updateState().then(setUpdate);
+    return api.onUpdate(setUpdate);
+  }, []);
 
   const refresh = useCallback(async () => {
     const [result, conflicts] = await Promise.all([api.status(), api.conflicts()]);
@@ -163,7 +237,9 @@ export default function App() {
   };
 
   if (!library) return null;
-  if (!library.valid) return <Setup library={library} onChoose={chooseLibrary} />;
+  if (!library.valid) {
+    return <Connect library={library} onChoose={chooseLibrary} onConnected={() => api.library().then(setLibrary)} />;
+  }
 
   const matrix = status ? buildMatrix(status) : null;
   const issues = status ? problems(status) : [];
@@ -193,6 +269,7 @@ export default function App() {
       </header>
 
       <SyncBanner sync={sync} busy={Boolean(busy)} onOpen={() => setResolving(sync)} />
+      <UpdateBanner update={update} />
 
       {status?.format?.readOnly && (
         <div className="notice warn" role="status" data-testid="read-only">
@@ -200,6 +277,12 @@ export default function App() {
             Библиотека обновлена до формата {status.format.library}, а эта версия Skillarium понимает только
             формат {status.format.supported}. Скиллы работают, но правки не публикуются, пока вы не обновите Skillarium.
           </p>
+          {update?.state !== 'development' && update?.state !== 'ready' && (
+            <button type="button" className="quiet" disabled={update?.state === 'checking' || update?.state === 'downloading'}
+              onClick={() => api.checkUpdate().then(setUpdate)}>
+              {update?.state === 'downloading' ? `Загружаю ${update.version}…` : 'Проверить обновление'}
+            </button>
+          )}
         </div>
       )}
 

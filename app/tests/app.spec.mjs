@@ -297,3 +297,25 @@ test('explains unapplied connections and unavailable projects', async () => {
   await expect(page.getByRole('button', { name: `${SHARED} в project alpha: папка недоступна` })).toBeDisabled();
   await expect(page.getByRole('switch', { name: `Глобальный доступ: ${SHARED}` })).toHaveAttribute('aria-checked', 'false');
 });
+
+test('first run offers to connect a library and reports a failed connection', async () => {
+  const env = { ...fixture.env };
+  delete env.AGENT_SKILLS_LIBRARY;
+  delete env.SKILLARIUM_LIBRARY;
+  const app = await electron.launch({ args: [appDir], env });
+  session = { app };
+  const page = await app.firstWindow();
+  const form = page.getByRole('form', { name: 'Подключить библиотеку' });
+  await expect(form).toBeVisible();
+  await expect(form.getByLabel('Папка на этом компьютере')).toHaveValue(path.join(fixture.home, 'Skillarium', 'library'));
+  await form.getByLabel('Адрес библиотеки').fill('http://127.0.0.1:9/owner/skills.git');
+  await form.getByLabel('Токен Gitea').fill('not-a-token');
+  await form.getByRole('button', { name: 'Подключить' }).click();
+  // The engine's client setup runs and fails before changing anything: nothing listens there.
+  await expect(page.getByRole('alert')).toContainText('Подключить библиотеку не удалось');
+  expect(fs.existsSync(path.join(fixture.home, 'Skillarium', 'library'))).toBe(false);
+  // An existing clone can still be chosen instead.
+  await answerFolderPicker(app, fixture.library);
+  await page.getByRole('button', { name: 'У меня уже есть клон — выбрать папку' }).click();
+  await expect(page.getByRole('switch', { name: `Глобальный доступ: ${SHARED}` })).toBeVisible();
+});

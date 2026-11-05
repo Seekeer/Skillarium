@@ -144,10 +144,20 @@ def build(version, out, base_url=DEFAULT_BASE_URL, apps=(), files=None):
     return feed
 
 
+def stage(version, folder):
+    """The engine as plain files (the app bundles it as resources/engine)."""
+    for name, mode, data in sorted(engine_files() + [('VERSION', 0o644, (version + '\n').encode())]):
+        target = folder / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        target.chmod(mode)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--version', required=True, help='Release version without the leading v, e.g. 1.2.0')
-    parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--out', type=Path)
+    parser.add_argument('--stage', type=Path, help='Write the engine files into this folder instead (app bundle)')
     parser.add_argument('--base-url', default=DEFAULT_BASE_URL,
                         help='Download prefix; the tag folder v<version> is appended')
     parser.add_argument('--app', action='append', default=[], type=Path,
@@ -158,6 +168,12 @@ def main():
     package = json.loads((ROOT / 'app' / 'package.json').read_text(encoding='utf-8'))
     if package['version'] != args.version:
         parser.error(f'app/package.json has version {package["version"]}, not {args.version}')
+    if args.stage:
+        stage(args.version, args.stage)
+        print(f'Engine {args.version} staged in {args.stage}')
+        return 0
+    if not args.out:
+        parser.error('--out or --stage is required')
     feed = build(args.version, args.out, args.base_url, args.app)
     print(f'Skillarium {args.version}: library formats {feed["format"]["min"]}-{feed["format"]["max"]}')
     for item in list(feed['engine'].values()) + list(feed['app'].values()):

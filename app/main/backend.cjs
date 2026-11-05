@@ -4,8 +4,14 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const script = process.platform === 'win32' ? 'projects.ps1' : 'projects.sh';
-// The engine ships with the app; in a development checkout it is the repository root.
-const engine = path.resolve(__dirname, '..', '..');
+// A development checkout runs the repository itself; the packaged app switches to
+// the engine it deployed (main/engine.cjs) before the first call.
+const repositoryRoot = path.resolve(__dirname, '..', '..');
+let engine = repositoryRoot;
+
+function useEngine(folder) {
+  engine = folder;
+}
 
 function isLibrary(folder) {
   return Boolean(folder) && fs.existsSync(path.join(folder, 'sources.json'))
@@ -20,11 +26,30 @@ function command(library, args) {
   return ['bash', [path.join(engine, script), '--library', library, ...args]];
 }
 
+// Connects this machine to a library with the engine's client setup; the token travels in a
+// private file that is removed right after. The app is already installed: no download.
+function connectCommand(url, folder, tokenFile) {
+  if (process.platform === 'win32') {
+    return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', path.join(engine, 'scripts', 'setup-client.ps1'), '-Library', url, '-Path', folder,
+      '-TokenFile', tokenFile, '-FromApp']];
+  }
+  return ['bash', [path.join(engine, 'scripts', 'setup-client.sh'), '--library', url, '--path', folder,
+    '--token-file', tokenFile, '--from-app']];
+}
+
 // Resolves with the exit code, the JSON line printed for the UI and the remaining messages.
 function runProjects(library, args) {
-  const [file, argv] = command(library, args);
+  return execute(command(library, args), library);
+}
+
+function connect(url, folder, tokenFile) {
+  return execute(connectCommand(url, folder, tokenFile), path.dirname(tokenFile));
+}
+
+function execute([file, argv], cwd) {
   return new Promise((resolve) => {
-    execFile(file, argv, { cwd: library, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    execFile(file, argv, { cwd, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
         let code = 0;
         if (error) code = typeof error.code === 'number' ? error.code : 1;
@@ -39,4 +64,4 @@ function runProjects(library, args) {
   });
 }
 
-module.exports = { engine, isLibrary, runProjects };
+module.exports = { repositoryRoot, useEngine, isLibrary, runProjects, connect };

@@ -15,7 +15,9 @@ param(
     [string]$Machine,
     [switch]$NoApp,
     [switch]$NoSchedule,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    # Run by the app's first-run screen: the app is already installed.
+    [switch]$FromApp
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -139,7 +141,7 @@ $config['library'] = $Path
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 
 $app = $null
-if (-not $NoApp) { $app = Install-App }
+if (-not $NoApp -and -not $FromApp) { $app = Install-App }
 $mode = if ($NoSchedule) { 'Sync' } else { 'Install' }
 & (Join-Path $engine 'install.ps1') -Mode $mode -Library $Path
 if (-not $?) { throw 'Linking the skills failed; see the messages above.' }

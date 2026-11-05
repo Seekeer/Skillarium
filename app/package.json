@@ -3,12 +3,78 @@
   "productName": "Skillarium",
   "private": true,
   "version": "0.1.0",
-  "description": "Local app: connect shared library skills to project folders",
+  "description": "Skillarium: shared agent skills on every machine and in every project",
+  "author": {
+    "name": "Skillarium"
+  },
+  "homepage": "https://github.com/Seekeer/Skillarium",
   "main": "main/main.cjs",
   "scripts": {
     "build": "vite build",
     "start": "vite build && electron .",
-    "test": "vite build && playwright test"
+    "test": "vite build && node --test \"tests/unit/*.test.cjs\" && playwright test",
+    "dist": "vite build && electron-builder --publish never"
+  },
+  "build": {
+    "appId": "io.github.seekeer.skillarium",
+    "productName": "Skillarium",
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "main/**",
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/engine",
+        "to": "engine"
+      },
+      {
+        "from": "../assets/brand/png/skillarium-icon-256.png",
+        "to": "icon.png"
+      }
+    ],
+    "icon": "../assets/brand/png/skillarium-icon-512.png",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Skillarium-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "artifactName": "Skillarium-${version}.AppImage"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Seekeer",
+        "repo": "Skillarium"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.8",
@@ -17,6 +83,7 @@
     "@playwright/test": "^1.56.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "^45.2.1",
+    "electron-builder": "26.18.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "vite": "^7.1.0"

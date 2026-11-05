@@ -1,8 +1,11 @@
 name: Release
 
-# A tag v<version> (matching app/package.json) publishes the engine archives
-# and the update feed latest.json. A version with a suffix (1.2.0-beta.1) is
-# a pre-release: the beta channel.
+# A tag v<version> (matching app/package.json) publishes, after the full test
+# suite: the app installers (NSIS for Windows, AppImage for Linux) with their
+# electron-updater files, the engine archives, the bootstrap scripts
+# skillarium.sh / skillarium.ps1 and the feed latest.json read by
+# `skillarium self-update`. A version with a suffix (1.2.0-beta.1) is a
+# pre-release: the beta channel.
 on:
   push:
     tags: ['v*']
@@ -14,13 +17,55 @@ jobs:
   tests:
     uses: ./.github/workflows/tests.yml
 
-  engine:
+  app:
     needs: tests
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Bundle the engine of this release into the app
+        shell: bash
+        run: python release/build_engine.py --version "${GITHUB_REF_NAME#v}" --stage app/build/engine
+      - name: Build the installer
+        working-directory: app
+        run: |
+          npm ci
+          npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            app/dist-app/*.exe
+            app/dist-app/*.AppImage
+            app/dist-app/*.yml
+            app/dist-app/*.blockmap
+
+  publish:
+    needs: app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build engine archives and latest.json
-        run: python3 release/build_engine.py --version "${GITHUB_REF_NAME#v}" --out dist
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: app-*
+          merge-multiple: true
+      - name: Engine archives, bootstrap scripts and latest.json
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 release/build_engine.py --version "$version" --out dist \
+            --app "dist/Skillarium-Setup-$version.exe" --app "dist/Skillarium-$version.AppImage"
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
@@ -34,3 +79,7 @@ jobs:
             dist/latest.json
             dist/skillarium.sh
             dist/skillarium.ps1
+            dist/Skillarium-Setup-*.exe
+            dist/Skillarium-*.AppImage
+            dist/*.yml
+            dist/*.blockmap

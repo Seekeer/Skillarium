@@ -12,4 +12,15 @@ contextBridge.exposeInMainWorld('skills', {
   setGlobal: (skill, enabled) => ipcRenderer.invoke('global', skill, enabled),
   conflicts: () => ipcRenderer.invoke('conflicts'),
   resolve: (request) => ipcRenderer.invoke('resolve', request),
+  defaultFolder: () => ipcRenderer.invoke('default-folder'),
+  chooseFolder: () => ipcRenderer.invoke('choose-folder'),
+  connect: (request) => ipcRenderer.invoke('connect', request),
+  updateState: () => ipcRenderer.invoke('update-state'),
+  checkUpdate: () => ipcRenderer.invoke('check-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdate: (listener) => {
+    const handler = (_event, state) => listener(state);
+    ipcRenderer.on('update', handler);
+    return () => ipcRenderer.removeListener('update', handler);
+  },
 });

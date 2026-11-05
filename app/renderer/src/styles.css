@@ -251,6 +251,15 @@ button.socket:hover:not(:disabled) { border-color: var(--wire); }
 .setup h1 { font: 700 28px/1.2 var(--display); }
 .setup h1 span { color: var(--wire); }
 .setup p { color: var(--muted); }
+.setup { margin-top: 8vh; }
+.setup .connect { display: grid; gap: 14px; margin: 24px 0 16px; }
+.setup .connect label { display: grid; gap: 6px; font-weight: 600; }
+.setup .connect input { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; min-width: 0; }
+.setup .connect .folder { display: flex; gap: 8px; }
+.setup .connect .folder input { flex: 1; }
+.setup .connect .sub { font-size: 13px; margin: 0; }
+.setup .connect .primary { justify-self: start; }
+.setup .notice { margin: 0 0 16px; }
 
 @media (max-width: 900px) {
   .board { grid-template-columns: 1fr; }
