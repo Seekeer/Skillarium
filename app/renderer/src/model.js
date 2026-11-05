@@ -42,9 +42,11 @@ export function globalCaption(global) {
   return global.enabled ? 'По умолчанию' : 'Выключено первым подключением';
 }
 
+// Lines carry no line ending: the result textarea reports CRLF as LF, so the ending is
+// restored only when the result is saved (see Resolver.jsx, resultText).
 export function lines(text) {
   if (text === null || text === undefined) return [];
-  const list = text.split('\n');
+  const list = text.split(/\r?\n/);
   if (list.length > 1 && list[list.length - 1] === '') list.pop();
   return list;
 }

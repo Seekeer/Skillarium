@@ -76,7 +76,7 @@ function SyncBanner({ sync, busy, onOpen }) {
 function Setup({ library, onChoose }) {
   return (
     <main className="setup">
-      <img className="mark" src={mark} alt="" />
+      <img className="brand-mark" src={mark} alt="" />
       <h1>skill<span>arium</span></h1>
       <p>В папке {library.path} нет библиотеки скиллов. Укажите рабочую копию agent-skills: в ней лежат sources.json и папка skills.</p>
       <button type="button" className="primary" onClick={onChoose}>Выбрать папку библиотеки</button>
@@ -129,7 +129,7 @@ export default function App() {
   function report(result, unapplied) {
     if (result.code === 0) return;
     if (result.code === 4 && unapplied) setNotice({ tone: 'warn', text: unapplied });
-    else setNotice({ tone: 'error', text: 'Действие не выполнено, файлы не изменены.', details: result.messages });
+    else setNotice({ tone: 'error', text: 'Действие не завершилось. Таблица показывает текущее состояние; подробности ниже.', details: result.messages });
   }
 
   async function chooseLibrary() {
@@ -173,7 +173,7 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div className="title">
-          <img className="mark" src={mark} alt="" />
+          <img className="brand-mark" src={mark} alt="" />
           <div className="title-text">
             <div className="wordmark">
               <h1>skill<span>arium</span></h1>

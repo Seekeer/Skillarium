@@ -28,9 +28,13 @@ const trailingNewline = (file) => Boolean(file.mine?.text?.endsWith('\n') || fil
 const diffsOf = (blocks) => blocks.filter((block) => block.type === 'diff');
 const fileName = (file) => file.path.slice(`skills/${file.skill}/`.length);
 
+// The shared version decides the line ending when the sides disagree.
+const lineEnding = (file) => ((file.library ?? file.mine)?.text?.includes('\r\n') ? '\r\n' : '\n');
+
 function resultText(file, state) {
-  const text = state.segments.join('');
-  return !trailingNewline(file) && text.endsWith('\n') ? text.slice(0, -1) : text;
+  let text = state.segments.join('');
+  if (!trailingNewline(file) && text.endsWith('\n')) text = text.slice(0, -1);
+  return lineEnding(file) === '\n' ? text : text.replace(/\n/g, '\r\n');
 }
 
 function resolved(file, state, blocks) {
@@ -270,13 +274,14 @@ export default function Resolver({ sync, onCancel, onApply }) {
       return;
     }
     const block = blocks[position(index)];
+    const status = { ...state.status, [index]: pick };
     change((old) => {
       const segments = [...old.segments];
       segments[position(index)] = segmentText(PICKS[pick](block));
       return { segments, status: { ...old.status, [index]: pick } };
     });
     // Move on to the next difference still waiting for a choice, as merge tools do.
-    const next = diffs.find((item) => item.index > index && !state.status[item.index]);
+    const next = diffs.find((item) => item.index > index && !status[item.index]);
     if (next) select(next.index);
   };
   const reset = () => {

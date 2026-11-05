@@ -226,6 +226,46 @@ test('shows a stopped synchronization and resolves the conflict with an edited v
   expect(git(fixture.library, fixture.env, 'status', '--porcelain')).toBe('');
 });
 
+test('resolves a conflict whose local version was saved with CRLF line endings', async () => {
+  const skillFile = (folder) => path.join(folder, 'skills', SHARED, 'SKILL.md');
+  const text = (first, second, eol = '\n') => [`---`, `name: ${SHARED}`, 'description: Test', '---',
+    first, 'Общая строка', second, ''].join(eol);
+  fs.writeFileSync(skillFile(fixture.seed), text('Коллега 1', 'Коллега 2'));
+  git(fixture.seed, fixture.env, 'commit', '-am', 'Teammate edit');
+  git(fixture.seed, fixture.env, 'push');
+  // skills/** is -text, so an editor on Windows can leave CRLF in both the file and its blob.
+  fs.writeFileSync(skillFile(fixture.library), text('Моя 1', 'Моя 2', '\r\n'));
+  git(fixture.library, fixture.env, 'commit', '-am', 'Share local skill edits\n\nAgent-Skills-Client: 1');
+  git(fixture.library, fixture.env, 'fetch', 'origin');
+
+  session = await launch(fixture);
+  const { page } = session;
+  await page.getByRole('region', { name: 'Синхронизация библиотеки' }).getByRole('button', { name: 'Разобрать конфликт' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Разбор конфликта синхронизации' });
+  // Line endings alone are no difference: only the two changed lines are.
+  await expect(dialog.getByRole('button', { name: 'Различие 1: не выбрано' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Различие 2: не выбрано' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /^Различие 3/ })).toHaveCount(0);
+
+  await dialog.getByRole('button', { name: /Взять правую/ }).click();
+  await expect(dialog.getByRole('button', { name: 'Различие 1: правая' })).toBeVisible();
+  // The textarea reports CRLF as LF; typing in one difference must not take over the others.
+  const merged = dialog.getByRole('textbox', { name: `Итоговый текст skills/${SHARED}/SKILL.md` });
+  await merged.evaluate((area) => {
+    const at = area.value.indexOf('Моя 2') + 'Моя 2'.length;
+    area.focus();
+    area.setSelectionRange(at, at);
+  });
+  await page.keyboard.type('!');
+  await expect(dialog.getByRole('button', { name: 'Различие 2: правка вручную' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Различие 1: правая' })).toBeVisible();
+  await page.keyboard.press('Control+Enter');
+
+  await expect(page.getByRole('alert')).toContainText('Конфликт разрешён и сохранён здесь');
+  // When the sides disagree, the shared version decides the line ending.
+  expect(fs.readFileSync(skillFile(fixture.library), 'utf8')).toBe(text('Коллега 1', 'Моя 2!'));
+});
+
 test('explains unapplied connections and unavailable projects', async () => {
   const foreign = path.join(fixture.beta, '.claude', 'skills', OTHER);
   fs.mkdirSync(foreign, { recursive: true });

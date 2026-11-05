@@ -66,7 +66,7 @@ button:disabled { cursor: default; opacity: 0.55; }
   color: var(--ring);
 }
 .title { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.mark { width: 44px; height: 44px; flex: none; display: block; }
+.brand-mark { width: 44px; height: 44px; flex: none; display: block; }
 .title-text { min-width: 0; }
 .wordmark { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .wordmark h1 { font: 700 22px/1.1 var(--display); letter-spacing: -0.01em; color: #fff; }
@@ -118,7 +118,8 @@ button:disabled { cursor: default; opacity: 0.55; }
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
-  overflow: hidden;
+  /* clip, not hidden: hidden makes the table a scroll container and breaks the sticky header and column. */
+  overflow: clip;
   box-shadow: 0 8px 24px rgba(30, 27, 75, 0.06);
 }
 .matrix th, .matrix td { border-bottom: 1px solid var(--line); padding: 8px 12px; text-align: center; vertical-align: middle; }
@@ -246,7 +247,7 @@ button.socket:hover:not(:disabled) { border-color: var(--wire); }
 .sync-banner .primary:hover:not(:disabled) { background: #92430a; }
 
 .setup { max-width: 560px; margin: 12vh auto; padding: 0 16px; }
-.setup .mark { width: 72px; height: 72px; margin-bottom: 20px; }
+.setup .brand-mark { width: 72px; height: 72px; margin-bottom: 20px; }
 .setup h1 { font: 700 28px/1.2 var(--display); }
 .setup h1 span { color: var(--wire); }
 .setup p { color: var(--muted); }
