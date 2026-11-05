@@ -2,7 +2,11 @@
 
 Репозиторий движка: нативные клиенты (`install.sh`, `install.ps1`,
 `scripts/`), сервер (`server/`), приложение (`app/`), шаблон библиотеки
-(`templates/library/`) и сборка выпусков (`release/`). Библиотека скиллов
+(`templates/library/`) и сборка выпусков (`release/`). Установка и
+обновление — `scripts/skillarium.*` (они же загрузочные скрипты выпуска),
+установка сервера — `server/setup.*`, клиента — `scripts/setup-client.*`,
+мост старой раскладки — `scripts/bridge.*`, переход библиотеки —
+`release/migrate_library.py` и [docs/migration.md](docs/migration.md). Библиотека скиллов
 пользователя (`skills/<name>/`, `sources.json`, `agent-skills.json`,
 `upstream/<name>/`) — отдельный репозиторий; здесь её нет, тесты создают
 временные библиотеки из шаблона. История agent-skills и agent-skills-updater
@@ -51,5 +55,9 @@ force-push и очистка пользовательской работы не 
 хостинга `tests/fake_hosting.py` (настоящая проверка `server/policy.py`,
 защита `main` хуком) и временными HOME/кешами; реальные пользовательские
 каталоги не используй. Правила PR на настоящем Gitea проверяй в отдельном
-тестовом репозитории. Linux-клиент проверяется на Linux (jq, flock, curl);
+тестовом репозитории. Установку из выпусков и настройку Gitea проверяй
+имитациями `tests/fake_releases.py` и `tests/fake_gitea.py`; реальные PATH,
+профиль и хранилище учётных данных пользователя не трогай (тесты задают
+`SKILLARIUM_HOME`, `APPDATA`, `GIT_CONFIG_GLOBAL`). Синхронизации старой
+раскладки в тестах идут с `SKILLARIUM_NO_BRIDGE=1`, кроме `test_bridge.py`. Linux-клиент проверяется на Linux (jq, flock, curl);
 junction и Планировщик — только нативно на Windows (`tests/README.md`).

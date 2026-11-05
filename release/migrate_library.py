@@ -25,7 +25,7 @@ import setup  # noqa: E402
 
 TEMPLATE = ROOT / 'templates' / 'library'
 # Library data is never removed, even where the engine repository has the same path.
-KEEP = ('skills/', 'upstream/', 'sources.json', 'agent-skills.json', 'customizations/', 'versions/')
+KEEP = ('skills/', 'upstream/', 'sources.json', 'agent-skills.json', 'customizations/', 'versions/', 'docs/')
 
 
 def git(repo, *args, data=None):

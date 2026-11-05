@@ -6,6 +6,13 @@
 Серверу нужны Python 3.9+, Git (лучше 2.38+ для слияния без рабочей копии),
 Bash, flock и пользовательский systemd.
 
+Сервер ставится одной командой `skillarium server --repo <url>` (см.
+«Установка» в корневом README; код — `server/setup.sh` и `server/setup.py`).
+Она же подключает существующую библиотеку, передаёт роль этой машине и
+переписывает таймеры на установленный движок (`current`). Команды ниже
+запускаются из него: `~/.local/share/skillarium/current/server/manage.py`,
+библиотека — из конфига Skillarium или `--repo`.
+
 ```bash
 python3 server/manage.py status
 python3 server/manage.py check
@@ -84,7 +91,14 @@ python3 server/manage.py import-local /path/to/my-skill [--dry-run|--no-publish]
   проверяется по каждому значению, исторические коммиты не проверяются;
 - удаление скилла целиком требует того же служебного автора;
 - изменение `agent-skills.json` допустимо только отдельным PR с коммитом
-  `Agent-Skills-Admin: assign-server`.
+  `Agent-Skills-Admin: assign-server`; исключение — `policy_engine` (выпуск
+  Skillarium, чью политику запускает проверка): его поднимает отдельным PR
+  только служебный автор назначенного сервера и только вперёд по версии
+  (`manage.py pin-policy`, ежедневно перед обслуживанием в `server/run.sh`).
+
+Проверка PR библиотеки (`templates/library/.gitea/workflows/policy.yml`)
+скачивает архив выпуска из `policy_engine` с GitHub, сверяет sha512 и
+запускает его `server/policy.py`; раннеру нужен доступ к GitHub.
 
 На Gitea для `main`: запрет прямого push (`enable_push: false`), обязательная
 проверка `Library policy / policy (pull_request_target)`,
@@ -115,9 +129,9 @@ python3 server/manage.py assign-server <machine>
 прежнем сервере: отдельный PR меняет `agent-skills.json`, открытые серверные PR
 и предложения прежней машины закрываются. Даже восстановленные, они больше не
 проходят проверку: она использует назначение из актуальной основной ветки.
-Затем на новой машине: `bash server/install.sh --install <machine>`; на
-прежней — `bash server/install.sh --uninstall`. Автоматического выбора
-сервера нет.
+Затем на новой машине: `skillarium server --repo <url>` (или
+`bash server/install.sh --install <machine>`); на прежней —
+`bash server/install.sh --uninstall`. Автоматического выбора сервера нет.
 
 ## Расписание и переход со старого updater
 
@@ -133,7 +147,9 @@ journalctl --user -u agent-skills-server.service -n 30
 чтобы старое и новое обслуживание не конкурировали. Чужие unit-файлы и сам
 каталог прежнего updater с его локальными изменениями не трогаются; после
 проверенного перехода прежний репозиторий можно архивировать. Код сервера
-обновляется обычной клиентской синхронизацией этой копии.
+обновляется самообновлением установленного движка (`skillarium-update.timer`);
+у библиотеки со встроенным движком — её синхронизацией, пока не пройден
+переход ([docs/migration.md](../docs/migration.md)).
 
 Порядок перехода: слить объединённую ветку в `main` (вручную, проверка ещё не
 действует), включить защиту `main` с проверкой, на i3 выполнить

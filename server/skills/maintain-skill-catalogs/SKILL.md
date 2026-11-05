@@ -1,14 +1,22 @@
 ---
 name: maintain-skill-catalogs
-description: Обслуживать единую библиотеку agent-skills — серверную роль и её передачу, настройки PR на Gitea, клиентские файлы и переход со старого updater.
+description: Обслуживать библиотеку скиллов Skillarium — установку и роль сервера, её передачу, настройки PR на Gitea, выпуски движка и переход библиотеки со встроенным движком.
 ---
 
 # Обслуживание библиотеки
 
-Прочитай README и server/README.md. Начни с `python3 server/manage.py status`
-и `check`. Полное обслуживание выполняет только назначенная машина:
-`maintain --apply-auto` (ежедневно через `bash server/install.sh --install
-<machine>`). Работа идёт во временной worktree; активная установка не меняется.
+Прочитай README и server/README.md. Начни с `skillarium status`,
+`python3 server/manage.py status` и `check` (из установленного движка
+`~/.local/share/skillarium/current`, библиотека — из конфига или `--repo`).
+Полное обслуживание выполняет только назначенная машина: `maintain
+--apply-auto` ежедневно по таймеру, который ставит `skillarium server --repo
+<url>`; перед ним сервер закрепляет выпуск политики (`pin-policy`). Работа идёт
+во временной worktree; активная установка не меняется.
+
+Установка и починка сервера — `skillarium server --repo <url>` (повтор
+безопасен). Движок обновляется `skillarium self-update` по таймеру, откат —
+`skillarium rollback`. Выпуски движка — тег `v<версия>` в репозитории
+Skillarium; не публикуй их без явной просьбы пользователя.
 
 Передача роли — явная административная операция пользователя:
 `python3 server/manage.py assign-server <machine>`, затем установка таймера на
@@ -24,6 +32,11 @@ description: Обслуживать единую библиотеку agent-skil
 (`client-manifest --write`) в том же изменении. Ручные правки клиентских
 копий на станциях сохраняются: сравни их с эталоном и перенеси нужное, не
 обходи конфликт через reset/clean.
+
+Переход библиотеки со встроенным движком на установленный Skillarium —
+по шагам [docs/migration.md](../../../docs/migration.md); PR с удалением
+движка (`release/migrate_library.py`) открывает пользователь, когда все машины
+переведены мостом.
 
 Переход со старого updater: `bash server/install.sh --install i3` отключает
 управляемый таймер agent-skills-updater; каталог старого updater с его

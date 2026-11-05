@@ -38,10 +38,38 @@ bare remote. Управляемые сбои: потерянный ответ н
   клиента через PR.
 - `test_windows_publication.py`, `test_windows_paths.py` — импорт собственных
   скиллов и правила путей Windows.
+- `test_engine_layout.py` — движок отдельно от библиотеки: явная библиотека,
+  переменная и конфиг, режим только чтения при новом формате.
+- `test_engine_install.py` — `skillarium` против `fake_releases.py` (имитация
+  GitHub Releases): установка, самообновление, битый sha512, оборванная
+  загрузка, откат с пропуском версии, хранение двух прежних версий, канал
+  beta, выпуск, не читающий формат библиотеки; загрузка из памяти, как
+  `irm | scriptblock` и `curl | bash`.
+- `test_server_setup.py` — `skillarium server` против `fake_gitea.py`
+  (пользователи, токены, репозитории, защита веток, раннеры): создание,
+  пустой репозиторий организации, существующая библиотека, чужой репозиторий,
+  новый формат, служебный бот, неверный токен, повтор без изменений.
+- `test_client_setup.py` — `skillarium client`: клон, ссылки, учётные данные,
+  повтор, токен без права записи, чужой клон в папке, установщик приложения с
+  неверной суммой; AppImage и пункт меню на Linux.
+- `test_bridge.py` — мост старой раскладки: установка Skillarium при
+  синхронизации, сохранение чужого конфига, недоступный выпуск, отключение,
+  перевод таймера на `current`.
+- `test_library_migration.py` — `release/migrate_library.py`: движок уходит
+  одним коммитом, данные и свои папки остаются, проверка PR его принимает.
+- `test_release.py` — выпуск: детерминированные архивы, `latest.json`,
+  загрузочные скрипты.
+
+Приложение: `npm test` в `app/` — юнит-тесты раскладки движка
+(`tests/unit`, `node --test`) и Playwright-тесты интерфейса, в том числе
+экрана первого запуска.
 
 ## Нативный Windows runner
 
-В `.gitea/workflows/tests.yml` есть Windows job. Нужен Gitea Actions runner
+CI движка — GitHub Actions (`.github/workflows/tests.yml`, `windows-latest`):
+свой runner не нужен. Ниже — как запускать то же на собственном Windows
+runner Gitea: в `.gitea/workflows/tests.yml` библиотеки со встроенным движком
+есть Windows job. Нужен Gitea Actions runner
 на Windows с меткой `windows-latest:host`, Git, Python 3.9+ в PATH, Windows
 PowerShell 5.1, Windows Script Host с VBScript и доступной службой Task
 Scheduler; для задачи с Interactive logon type — вошедший пользователь runner.

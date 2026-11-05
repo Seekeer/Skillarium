@@ -267,6 +267,41 @@ Gitea, а на Windows — нативно в CI.
    `add-shared-skill`, `check-skill-updates`), `server/README.md` и
    `tests/README.md` под разделение.
 
+## Статус этапов 3–8 (2026-11-05)
+
+Всё ниже сделано в локальном репо `Skillarium` и покрыто тестами; на GitHub
+ещё не опубликовано, поэтому выпусков и CI на Linux пока не было.
+
+- **Этап 3.** `scripts/skillarium.sh`/`.ps1`: `install`, `self-update
+  [--channel]`, `rollback` (с пропуском версии), `status`, `enable-updates`;
+  они же — загрузочные скрипты выпуска (`server`/`client` ставят движок и
+  запускают установку роли). Рядом с версией хранится её `release.json`.
+  Команда установки — не `install.sh engine`, а `skillarium install`: старый
+  `install.sh` остаётся клиентом. Тесты: `test_engine_install.py`.
+- **Этап 4.** `skillarium server` → `server/setup.sh` (зависимости, linger) и
+  `server/setup.py`. Сервер закрепляет `policy_engine` своим PR
+  (`manage.py pin-policy`, правило в `policy.py`: только сервер и только
+  вперёд). Тесты: `test_server_setup.py`, `test_policy.py`, `test_server.py`.
+- **Этап 5.** `skillarium client` → `scripts/setup-client.*`. Тесты:
+  `test_client_setup.py`.
+- **Этап 6.** electron-builder (NSIS per-user, AppImage, движок в
+  `resources/engine`), electron-updater (каналы через `allowPrerelease`),
+  раскладка движка в `versions/<v>` + `current` при запуске, экран первого
+  запуска, баннер обновления. Выпуск собирает установщики после тестов и
+  кладёт их в `latest.json` (`app.*`). Распакованная сборка Windows проверена
+  вручную: движок раскладывается, `current` — junction. Подписи нет.
+- **Этап 7.** Мост `scripts/bridge.*` в синхронизации старой раскладки,
+  `release/migrate_library.py`, порядок шагов — `docs/migration.md`. В
+  `agent-skills` — ветка `skillarium/bridge` с движком Skillarium и мостом
+  (не слита, не отправлена). Отдельная команда `manage.py migrate` по-прежнему
+  не нужна, пока нет второй версии формата.
+- **Этап 8.** README (установка, обновления, движок и библиотека),
+  `server/README.md`, `tests/README.md`, `AGENTS.md`, системные скиллы.
+
+Осталось за пользователем: опубликовать `Seekeer/Skillarium` и выпустить
+`v0.1.0`, затем шаги `docs/migration.md` (слить мост, поставить сервер на i3,
+убрать движок из библиотеки, поставить приложение).
+
 ## Проверка
 
 Сохраняются правила `AGENTS.md`:
