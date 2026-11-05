@@ -9,12 +9,19 @@
 #             4 the binding is saved but not applied (see status);
 #             5 the synchronization conflict changed; nothing was merged.
 $ErrorActionPreference = 'Stop'
-$repo = $PSScriptRoot
+$engine = $PSScriptRoot
+. (Join-Path $engine 'scripts\locate.ps1')
+$library = $null
+$rest = @($args)
+if ($rest.Count -ge 2 -and @('-Library', '--library') -contains [string]$rest[0]) {
+    $library = [string]$rest[1]
+    $rest = @($rest | Select-Object -Skip 2)
+}
 $commands = @{status = @(0); register = @(1); unregister = @(1); bind = @(2); unbind = @(2, 3); global = @(2); conflicts = @(0); resolve = @(1)}
-$command = [string]@($args)[0]
-$arguments = @($args | Select-Object -Skip 1)
+$command = [string]@($rest)[0]
+$arguments = @($rest | Select-Object -Skip 1)
 if (-not $command -or -not $commands.ContainsKey($command) -or $commands[$command] -notcontains $arguments.Count) {
-    [Console]::Error.WriteLine('Usage: projects.ps1 status|register|unregister|bind|unbind|global|conflicts|resolve ...; see the header of projects.ps1.')
+    [Console]::Error.WriteLine('Usage: projects.ps1 [-Library <folder>] status|register|unregister|bind|unbind|global|conflicts|resolve ...; see the header of projects.ps1.')
     exit 2
 }
 
@@ -30,8 +37,9 @@ $previousEncoding = [Console]::OutputEncoding
 $lock = $null
 $result = 1
 try {
-    . (Join-Path $repo 'scripts\client.ps1')
-    . (Join-Path $repo 'scripts\bindings.ps1')
+    $repo = Resolve-Library -Explicit $library -Engine $engine
+    . (Join-Path $engine 'scripts\client.ps1')
+    . (Join-Path $engine 'scripts\bindings.ps1')
     if ($command -cnotin @('status', 'conflicts')) {
         # The background client uses the same lock; wait for it instead of skipping.
         $lockPath = Invoke-Git -GitArgs @('rev-parse', '--git-path', 'agent-skills-sync.lock')

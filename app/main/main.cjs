@@ -3,7 +3,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { isLibrary, runProjects } = require('./backend.cjs');
+const { engine, isLibrary, runProjects } = require('./backend.cjs');
 
 const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const OBJECT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -17,9 +17,19 @@ function readSettings() {
   try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { return {}; }
 }
 
-// The app lives in the library checkout; a saved choice or AGENT_SKILLS_LIBRARY may point elsewhere.
+// The Skillarium configuration shared with the native clients and the server.
+function engineConfig() {
+  const root = process.platform === 'win32'
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Skillarium')
+    : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'skillarium');
+  try { return JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')); } catch { return {}; }
+}
+
+// Environment, the app's own choice, the shared configuration, then a development
+// checkout that is itself a library.
 function library() {
-  return process.env.AGENT_SKILLS_LIBRARY || readSettings().library || path.resolve(__dirname, '..', '..');
+  return process.env.SKILLARIUM_LIBRARY || process.env.AGENT_SKILLS_LIBRARY || readSettings().library
+    || engineConfig().library || (isLibrary(engine) ? engine : '');
 }
 
 function text(value) {
@@ -32,7 +42,9 @@ function skill(value) {
   return value;
 }
 
-const run = (...args) => runProjects(library(), args);
+const run = (...args) => (isLibrary(library())
+  ? runProjects(library(), args)
+  : Promise.resolve({ code: 1, json: null, messages: ['Библиотека скиллов не выбрана.'] }));
 
 ipcMain.handle('library', () => ({ path: library(), valid: isLibrary(library()) }));
 ipcMain.handle('choose-library', async () => {

@@ -194,6 +194,15 @@ export default function App() {
 
       <SyncBanner sync={sync} busy={Boolean(busy)} onOpen={() => setResolving(sync)} />
 
+      {status?.format?.readOnly && (
+        <div className="notice warn" role="status" data-testid="read-only">
+          <p>
+            Библиотека обновлена до формата {status.format.library}, а эта версия Skillarium понимает только
+            формат {status.format.supported}. Скиллы работают, но правки не публикуются, пока вы не обновите Skillarium.
+          </p>
+        </div>
+      )}
+
       {notice && (
         <div className={`notice ${notice.tone}`} role="alert">
           <p>{notice.text}</p>

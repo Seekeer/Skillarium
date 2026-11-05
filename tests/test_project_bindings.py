@@ -22,7 +22,7 @@ CLIENT = 'powershell' if WINDOWS else 'bash'
 PWSH = os.environ.get('AGENT_SKILLS_PWSH') or 'powershell.exe'
 CLIENT_FILES = ['install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', '.gitattributes',
                 'scripts/client.sh', 'scripts/client.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
-                'scripts/sync-hidden.vbs', 'agent-skills.json']
+                'scripts/sync-hidden.vbs', 'scripts/locate.sh', 'scripts/locate.ps1', 'agent-skills.json']
 AGENTS = ['.agents', '.claude']
 SHARED, OTHER = 'shared-skill', 'other-skill'
 

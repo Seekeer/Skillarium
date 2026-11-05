@@ -531,6 +531,9 @@ function Invoke-Status {
         $rows += [ordered]@{name = $name; projects = $bound
             global = [ordered]@{enabled = $choice.enabled; manual = $choice.manual; pending = $choice.pending; links = $links}}
     }
-    Write-Json ([ordered]@{library = $repo; state = $bindingsFile; skills = $rows; projects = $projects})
+    $format = [Math]::Max((Get-LibraryFormat), (Get-LibraryFormat "refs/remotes/origin/$mainBranch"))
+    Write-Json ([ordered]@{library = $repo; state = $bindingsFile
+        format = [ordered]@{library = $format; supported = $supportedFormat; readOnly = ($format -gt $supportedFormat)}
+        skills = $rows; projects = $projects})
     return 0
 }

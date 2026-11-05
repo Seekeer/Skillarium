@@ -28,6 +28,13 @@
 `python3 server/manage.py client-manifest --write`; новые клиентские файлы
 добавляй в `CLIENT_FILES` (server/absorb_updater.py). Изменения кода и
 документации не попадают в автоматические клиентские коммиты — сохраняй это.
+Движок не должен считать свою папку библиотекой: путь библиотеки
+передаётся явно (`--library`/`-Library`/`--repo`, `SKILLARIUM_LIBRARY`,
+конфиг Skillarium), а файлы движка берутся из папки скрипта. Формат
+библиотеки (`format` в `agent-skills.json`) поднимается только вместе с
+`supported_format` в `scripts/locate.*` и `SUPPORTED_FORMAT` в
+`server/hosting.py`. План распространения:
+[.scratch/skillarium-distribution/plan.md](.scratch/skillarium-distribution/plan.md).
 Интерфейсы ссылок расширяемы (`link_roots`/`Get-LinkRoots`) для проектных
 подключений.
 

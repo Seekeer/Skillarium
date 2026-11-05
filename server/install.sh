@@ -3,7 +3,10 @@
 # A managed timer of the former separate agent-skills-updater is switched off
 # first, so old and new maintenance never run side by side.
 set -euo pipefail
-library=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$engine/scripts/locate.sh"
+split_library_arg "$@" || exit 2
+set -- ${rest[@]+"${rest[@]}"}
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 marker='# Managed by agent-skills-server'
 legacy_marker='# Managed by agent-skills-updater'
@@ -11,7 +14,7 @@ mode=${1:---install}
 machine=${2:-}
 case "$mode" in
     --install|--uninstall) ;;
-    *) echo 'Usage: bash server/install.sh [--install [<machine-name>]|--uninstall]' >&2; exit 2 ;;
+    *) echo 'Usage: bash server/install.sh [--library <folder>] [--install [<machine-name>]|--uninstall]' >&2; exit 2 ;;
 esac
 
 remove_managed() {
@@ -30,6 +33,8 @@ if [[ "$mode" == --uninstall ]]; then
     systemctl --user daemon-reload
     exit 0
 fi
+resolve_library "$library_arg" || exit 2
+library=$repo
 
 for unit in agent-skills-server.service agent-skills-server.timer; do
     if [[ -e "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") != "$marker" ]]; then
@@ -50,9 +55,15 @@ if [[ -f "$unit_dir/agent-skills-updater.timer" ]]; then
     systemctl --user stop agent-skills-updater.service || true
     remove_managed "$legacy_marker" agent-skills-updater.service agent-skills-updater.timer
 fi
-path=$library
-path=${path//\\/\\\\}; path=${path//\"/\\\"}
-path=${path//%/%%}; path=${path//\$/\$\$}
+unit_quote() {
+    local value=$1
+    value=${value//\\/\\\\}; value=${value//\"/\\\"}
+    value=${value//%/%%}; value=${value//\$/\$\$}
+    printf '"%s"' "$value"
+}
+# The engine runs the library given here; the legacy layout keeps its old line.
+exec_start="/usr/bin/bash $(unit_quote "$engine/server/run.sh")"
+if [[ "$engine" != "$library" ]]; then exec_start+=" --repo $(unit_quote "$library")"; fi
 mkdir -p -- "$unit_dir"
 cat >"$unit_dir/agent-skills-server.service" <<EOF
 $marker
@@ -60,7 +71,7 @@ $marker
 Description=Maintain the shared skill library on the assigned server
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/bash "$path/server/run.sh"
+ExecStart=$exec_start
 TimeoutStartSec=15min
 EOF
 cat >"$unit_dir/agent-skills-server.timer" <<EOF
@@ -77,4 +88,4 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable --now agent-skills-server.timer
 echo "Installed server timer for machine $(git -C "$library" config --get agent-skills.machine || hostname -s)."
-echo 'The assigned server is set in agent-skills.json; see: python3 server/manage.py status'
+echo "The assigned server is set in agent-skills.json; see: python3 $engine/server/manage.py --repo $library status"

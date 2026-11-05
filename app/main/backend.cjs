@@ -1,20 +1,23 @@
-// Runs the library's projects command; the shell scripts own all file and Git changes.
+// Runs the engine's projects command against a library; the shell scripts own all file and Git changes.
 const { execFile } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 
 const script = process.platform === 'win32' ? 'projects.ps1' : 'projects.sh';
+// The engine ships with the app; in a development checkout it is the repository root.
+const engine = path.resolve(__dirname, '..', '..');
 
 function isLibrary(folder) {
-  return Boolean(folder) && fs.existsSync(path.join(folder, script)) && fs.existsSync(path.join(folder, 'sources.json'));
+  return Boolean(folder) && fs.existsSync(path.join(folder, 'sources.json'))
+    && fs.existsSync(path.join(folder, 'agent-skills.json'));
 }
 
 function command(library, args) {
   if (process.platform === 'win32') {
     return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', path.join(library, script), ...args]];
+      '-File', path.join(engine, script), '-Library', library, ...args]];
   }
-  return ['bash', [path.join(library, script), ...args]];
+  return ['bash', [path.join(engine, script), '--library', library, ...args]];
 }
 
 // Resolves with the exit code, the JSON line printed for the UI and the remaining messages.
@@ -36,4 +39,4 @@ function runProjects(library, args) {
   });
 }
 
-module.exports = { isLibrary, runProjects };
+module.exports = { engine, isLibrary, runProjects };

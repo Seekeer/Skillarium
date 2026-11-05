@@ -15,6 +15,7 @@ from fake_hosting import FakeHosting, protect
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ('install.sh', 'install.ps1', 'scripts/client.sh', 'scripts/client.ps1', 'scripts/sync-hidden.vbs',
+          'scripts/locate.sh', 'scripts/locate.ps1',
           'projects.sh', 'projects.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
           'README.md', '.gitattributes', '.gitignore', '.agent-skills-client.json')
 HAS_BASH_CLIENT = os.name != 'nt' and all(shutil.which(tool) for tool in ('bash', 'jq', 'flock', 'curl'))

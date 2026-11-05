@@ -43,7 +43,7 @@ try {
     $env:GIT_AUTHOR_NAME = $env:GIT_COMMITTER_NAME = 'agent-skills-test'
     $env:GIT_AUTHOR_EMAIL = $env:GIT_COMMITTER_EMAIL = 'test@example.invalid'
 
-    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
+    foreach ($relative in @('install.ps1', 'scripts/client.ps1', 'scripts/bindings.ps1', 'scripts/locate.ps1', 'scripts/sync-hidden.vbs', '.gitattributes', 'agent-skills.json')) {
         $destination = Join-Path $seed $relative
         [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $projectRoot $relative) -Destination $destination

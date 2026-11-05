@@ -1,5 +1,6 @@
 # Git-only PowerShell client. The server owns all external-source operations.
 # Publications go through proposal branches and pull requests; main is never pushed.
+if (-not (Get-Command Assert-LibraryFormat -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'locate.ps1') }
 $cacheRoot = $env:LOCALAPPDATA
 if (-not $cacheRoot) { $cacheRoot = [Environment]::GetFolderPath('LocalApplicationData') }
 $cache = Join-Path $cacheRoot 'agent-skills'
@@ -394,11 +395,15 @@ function Sync-Repository {
     if ($remotes -notcontains 'origin') { Write-Warning 'No origin; linking local catalog only.'; return }
     Invoke-Git -GitArgs @('symbolic-ref', '-q', 'HEAD') | Out-Null
     Invoke-Git -GitArgs @('rev-parse', '--verify', '-q', '@{upstream}') | Out-Null
+    # A library migrated past this engine is used as is: no commits, merges or publications.
+    Assert-LibraryFormat
+    Assert-LibraryFormat '@{upstream}'
     Assert-AutomaticCommits
     Migrate-LegacyLinks
     Publish-LocalChanges
     for ($attempt = 0; $attempt -lt 2; $attempt++) {
         Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'fetch', '-q', '--prune', 'origin') | Out-Null
+        Assert-LibraryFormat '@{upstream}'
         Assert-AutomaticCommits
         Reconcile-Repository
         Migrate-LegacyLinks
@@ -497,6 +502,9 @@ function Show-Status {
     $assigned = 'unknown'
     try { $assigned = ((Invoke-Git -GitArgs @('show', "refs/remotes/origin/${mainBranch}:agent-skills.json")) -join "`n" | ConvertFrom-Json).server.machine } catch { }
     Write-Output "Machine: $machine; assigned server: $assigned"
+    $format = 'unknown'
+    try { $format = Get-LibraryFormat } catch { }
+    Write-Output "Library: $repo; format $format, engine supports $supportedFormat"
     $pending = 'unknown'
     try { $pending = @(Invoke-Git -GitArgs @('rev-list', '@{upstream}..HEAD')).Count } catch { }
     Write-Output "Unpublished automatic commits: $pending"

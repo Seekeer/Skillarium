@@ -15,13 +15,39 @@ import sys
 import tempfile
 
 import absorb_updater
+import hosting
 import maintenance
 import skills
 
-LIBRARY = Path(__file__).resolve().parents[1]
+ENGINE = Path(__file__).resolve().parents[1]
 CLIENT_FILES = absorb_updater.CLIENT_FILES
 MANIFEST = absorb_updater.MANIFEST
 SERVER_COMMANDS = ('maintain', 'register', 'set-policy', 'deploy-client')
+
+
+def is_library(path):
+    return (path / 'sources.json').is_file() and (path / hosting.CONFIG).is_file()
+
+
+def config_path():
+    """The Skillarium configuration shared with the native clients."""
+    if os.name == 'nt':
+        return Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'Skillarium' / 'config.json'
+    return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'skillarium' / 'config.json'
+
+
+def default_library():
+    """Same order as the clients: SKILLARIUM_LIBRARY, the engine folder itself
+    when it is a library (legacy layout), then the configured library."""
+    if os.environ.get('SKILLARIUM_LIBRARY'):
+        return Path(os.environ['SKILLARIUM_LIBRARY'])
+    if is_library(ENGINE):
+        return ENGINE
+    try:
+        configured = json.loads(config_path().read_text(encoding='utf-8')).get('library')
+    except (OSError, ValueError):
+        configured = None
+    return Path(configured) if configured else None
 
 
 def manifest_plan(repo):
@@ -66,9 +92,9 @@ def describe_local_import(plan):
 def client_sync(repo):
     if os.name == 'nt':
         command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                   '-File', str(repo / 'install.ps1'), '-Mode', 'Sync']
+                   '-File', str(ENGINE / 'install.ps1'), '-Mode', 'Sync', '-Library', str(repo)]
     else:
-        command = ['bash', str(repo / 'install.sh'), '--sync-only']
+        command = ['bash', str(ENGINE / 'install.sh'), '--library', str(repo), '--sync-only']
     return subprocess.run(command).returncode
 
 
@@ -116,15 +142,20 @@ def import_local(repo, directory, name, dry_run, publish):
 
 
 def dispatch(args):
-    repo = args.repo.resolve()
+    # The client manifest describes the engine's own files, wherever the library is.
     if args.command == 'client-manifest':
-        return client_manifest(repo, args.write)
+        return client_manifest(ENGINE if args.repo is None else args.repo.resolve(), args.write)
+    if args.repo is None:
+        raise ValueError(f'Skill library not found: pass --repo <folder> or set "library" in {config_path()}')
+    repo = args.repo.resolve()
     if args.command == 'absorb-updater':
         return absorb_updater.absorb(repo, args.updater, args.revision)
     if args.command in ('register-local', 'import-local'):
         return import_local(repo, args.directory, getattr(args, 'name', None), args.dry_run, args.publish)
     if args.command == 'status':
-        client_manifest(repo, False)
+        # Only a library that still carries the engine files has a client manifest.
+        if (repo / MANIFEST).is_file():
+            client_manifest(repo, False)
         return maintenance.status(repo)
     skills.set_catalog(repo)
     with maintenance.library_lock(repo):
@@ -149,7 +180,8 @@ def dispatch(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--repo', type=Path, default=LIBRARY, help='Library working copy (default: this repository)')
+    parser.add_argument('--repo', type=Path, default=default_library(),
+                        help='Library working copy (default: SKILLARIUM_LIBRARY, this repository, the configured library)')
     parser.add_argument('--catalog', help='Compatibility: the only library is agent-skills')
     commands = parser.add_subparsers(dest='command', required=True)
     names = ('status', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server',
@@ -206,7 +238,7 @@ def main():
     if args.command == 'import-local' and args.dry_run:
         args.publish = False
     args.apply_auto = getattr(args, 'apply_auto', False)
-    if args.catalog not in (None, 'agent-skills', args.repo.resolve().name):
+    if args.catalog not in (None, 'agent-skills') and (args.repo is None or args.catalog != args.repo.resolve().name):
         parser.error('Unknown catalog: ' + args.catalog)
     try:
         return dispatch(args)

@@ -420,10 +420,15 @@ cmd_status() {
         rows+=("$(jq -cn --arg n "$name" --argjson g "$(global_json "$name")" --argjson l "$links" \
             '{name: $n, global: ($g + {links: $l}), projects: []}')")
     done <<<"$names"
+    local here remote
+    here=$(library_format) || here=1
+    remote=$(library_format "refs/remotes/origin/$main_branch") || remote=1
     printf '%s\n' "${projects[@]}" | jq -cs --arg library "$repo" --arg file "$bindings_file" \
+        --argjson format "$(( here > remote ? here : remote ))" --argjson supported "$supported_format" \
         --argjson skills "$(printf '%s\n' "${rows[@]}" | jq -cs 'map(select(. != null))')" '
         map(select(. != null)) as $projects
         | {library: $library, state: $file,
+           format: {library: $format, supported: $supported, readOnly: ($format > $supported)},
            skills: [$skills[] | .name as $n | .projects = [$projects[] | select(any(.skills[]; .name == $n)) | .path]],
            projects: $projects}'
 }

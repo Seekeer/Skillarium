@@ -4,13 +4,15 @@ param(
     [ValidateSet('Install', 'Sync', 'Link', 'Uninstall', 'Status', 'Updates', 'Review', 'Approve', 'Resolve')][string]$Mode = 'Install',
     [string]$Skill,
     [string]$Commit,
-    [ValidateSet('keep-ours', 'take-upstream', 'merged')][string]$Strategy
+    [ValidateSet('keep-ours', 'take-upstream', 'merged')][string]$Strategy,
+    [string]$Library
 )
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Use install.sh on Linux.'
 }
-$repo = $PSScriptRoot
+$engine = $PSScriptRoot
+. (Join-Path $engine 'scripts\locate.ps1')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $taskName = "AgentSkills-Hourly-$($identity.User.Value)"
 if ($Mode -eq 'Uninstall') {
@@ -19,6 +21,7 @@ if ($Mode -eq 'Uninstall') {
     Write-Output 'Hourly task removed. Skills and junctions were kept.'
     return
 }
+$repo = Resolve-Library -Explicit $Library -Engine $engine
 
 function Invoke-Git {
     param([string[]]$GitArgs, [string]$Directory = $repo)
@@ -47,7 +50,7 @@ try {
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
-    . (Join-Path $repo 'scripts\client.ps1')
+    . (Join-Path $engine 'scripts\client.ps1')
     if ($Mode -in @('Review', 'Approve', 'Resolve') -and -not $Skill) { throw "-Skill is required for -Mode $Mode." }
     if ($Mode -in @('Approve', 'Resolve') -and -not $Commit) { throw "-Commit is required for -Mode $Mode." }
     if ($Mode -eq 'Resolve' -and -not $Strategy) { throw '-Strategy is required for -Mode Resolve.' }
@@ -62,7 +65,7 @@ try {
         'Approve' { Approve-Update -Name $Skill -Commit $Commit; return }
         'Resolve' { Resolve-Update -Name $Skill -Commit $Commit -Strategy $Strategy; return }
     }
-    . (Join-Path $repo 'scripts\bindings.ps1')
+    . (Join-Path $engine 'scripts\bindings.ps1')
     if ($Mode -ne 'Link') {
         try { Sync-Repository }
         catch { Write-Warning $_.Exception.Message; $failed = $true }
@@ -72,12 +75,15 @@ try {
     if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -in @('Install', 'Sync')) {
-        $launcher = Join-Path $repo 'scripts\sync-hidden.vbs'
+        $launcher = Join-Path $engine 'scripts\sync-hidden.vbs'
         $hostPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
         if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
             throw 'Windows Script Host is required for background synchronization.'
         }
-        $action = New-ScheduledTaskAction -Execute $hostPath -Argument "//B //NoLogo `"$launcher`"" -WorkingDirectory $repo
+        # The engine runs the library given here; the legacy layout keeps its old arguments.
+        $taskArguments = "//B //NoLogo `"$launcher`""
+        if ($engine.TrimEnd('\') -ne $repo) { $taskArguments += " `"$repo`"" }
+        $action = New-ScheduledTaskAction -Execute $hostPath -Argument $taskArguments -WorkingDirectory $repo
     }
     if ($Mode -eq 'Install') {
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1) -RepetitionInterval (New-TimeSpan -Hours 1)

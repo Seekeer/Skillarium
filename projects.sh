@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Local project bindings of library skills; the backend of the "Projects" UI.
 set -euo pipefail
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$engine/scripts/locate.sh"
 usage() {
     cat <<'EOF'
-Usage: bash projects.sh status
+Usage: bash projects.sh [--library <folder>] <command> ...
+       bash projects.sh status
        bash projects.sh register <folder> | unregister <folder>
        bash projects.sh bind <folder> <skill>
        bash projects.sh unbind <folder> <skill> [global|library]
@@ -15,6 +17,8 @@ Exit codes: 3 the last binding needs a global-access choice (JSON on stdout);
             5 the synchronization conflict changed; nothing was merged.
 EOF
 }
+split_library_arg "$@" || exit 2
+set -- ${rest[@]+"${rest[@]}"}
 command=${1:-}
 case "$command:$#" in
     status:1|conflicts:1|resolve:2|register:2|unregister:2|global:3|bind:3|unbind:3|unbind:4) shift ;;
@@ -22,8 +26,9 @@ case "$command:$#" in
     *) usage >&2; exit 2 ;;
 esac
 
-source "$repo/scripts/client.sh"
-source "$repo/scripts/bindings.sh"
+resolve_library "$library_arg" || exit 1
+source "$engine/scripts/client.sh"
+source "$engine/scripts/bindings.sh"
 if [[ "$command" != status && "$command" != conflicts ]]; then
     # The background client uses the same lock; wait for it instead of skipping.
     lock_path=$(git -C "$repo" rev-parse --git-path agent-skills-sync.lock)

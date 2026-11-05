@@ -1,16 +1,18 @@
 {
   "files": {
     ".gitattributes": "33a26aeab410c1c325f572e28eb94da61d399d412ad4cfec2e8b101f767d6f4b",
-    "README.md": "233b26b1c53577995c1a2fe3a0232565b7a6f0bedc6b8b520b3a9e115f08ca0d",
-    "install.ps1": "93d99f0c56e2b3756b2a2b64fb4454b95516ff9725656068c400585665c0de5f",
-    "install.sh": "ba5949d20adc7aab32e7ae497d50f256514e7346cdbf61796e6118787dc96673",
-    "projects.ps1": "404fb11ad04edaeb09f926ca9dade628f6fd3d97cefd2a4496a92ebb2c6f2cfc",
-    "projects.sh": "246e2407d653ca92d0c1e52066abfe389755d40c642644af2e346a1cb9cc504f",
-    "scripts/bindings.ps1": "ecc1daf95a275a6edbaa393251d11f9166353b898083123b0719f3f19d45839a",
-    "scripts/bindings.sh": "93c8faec0541da0c9780620efe6afb8b20a6b158ba3453e9fd417d11e3b1f98a",
-    "scripts/client.ps1": "c8bbaa0e2f02f8e26d021050b67f2b653236f8101e2bf2dce8eb7a571de86cf2",
-    "scripts/client.sh": "8e9e4fc22b9d8c929cc55d66782ba56aa711443bf86824a800348f7b7d58a46f",
-    "scripts/sync-hidden.vbs": "3393e65cf531e90875784b71915a93494a8147ea3d9dd3fa8e5cc8bf326ee555"
+    "README.md": "0d3818d77aa3fcd8e3b6cf81979633eada1e228cd15d24f71c64ab7d18dd36af",
+    "install.ps1": "9dc28eeb32f7f61e6d6d711da4235db58ea4ae2a2345ae1e253ed08c6f314599",
+    "install.sh": "c05c14e298c263b0f4c2a104341c0a9605d0a32d25cbc583258ccbb14744fcfc",
+    "projects.ps1": "70f3215c8a8ad702bd0bc6c05cba59792a3ca894f5d88e01749135d8f9affc88",
+    "projects.sh": "b52d75cafb6b5ee7bebf9bb399b4a1ca41f4bff08a4cf31e74681012eb40d59e",
+    "scripts/bindings.ps1": "14acc59a092b7313f05597eb7838a92a0a9507f38ce506f566afd2b835c5e23c",
+    "scripts/bindings.sh": "0e8d517c427dbd2a8c8a50eb97dace5fe3ca1bc94e3292cdbefea69ca4c077da",
+    "scripts/client.ps1": "41f95e1b57964518f338732e9f0310f28939fa3fd7f51a55e5ba1c1cd341a3ac",
+    "scripts/client.sh": "e0cd70bdc5078dc36fb9505efba1b7db50faefc05f420b722a31e5c1f0cc18a2",
+    "scripts/locate.ps1": "1a24068629a9fc74ab916113f3bb4f7fc4193990af7cae57081386320c0d4b03",
+    "scripts/locate.sh": "a23ea5ac064fa83c8ce707bfdf1d3957030db7b4fa04d55977164ab2435f7201",
+    "scripts/sync-hidden.vbs": "21a6da4064c064aef079fe122208c3e014e547c430732a92175483a76d12dfaa"
   },
   "generator": "agent-skills/client",
   "version": 1

@@ -1,5 +1,6 @@
 # Git-only Linux client. External sources are handled exclusively by the server.
 # Publications go through proposal branches and pull requests; main is never pushed.
+declare -F assert_format >/dev/null || source "$(dirname -- "${BASH_SOURCE[0]}")/locate.sh"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/agent-skills"
 main_branch=main
 proposal_prefix=agent-skills/update
@@ -353,12 +354,16 @@ sync_repository() {
     fi
     git -C "$repo" symbolic-ref -q HEAD >/dev/null || return 1
     git -C "$repo" rev-parse --verify -q '@{upstream}' >/dev/null || return 1
+    # A library migrated past this engine is used as is: no commits, merges or publications.
+    assert_format || return 1
+    assert_format '@{upstream}' || return 1
     assert_automatic_commits || return 1
     migrate_legacy_links || return 1
     publish_local_changes || return 1
     local attempt pending
     for attempt in 1 2; do
         git -C "$repo" -c credential.interactive=false fetch -q --prune origin || return 1
+        assert_format '@{upstream}' || return 1
         assert_automatic_commits || return 1
         reconcile_repository || return 1
         migrate_legacy_links || return 1
@@ -421,6 +426,7 @@ show_status() {
     machine=$(machine_name) || return 1
     assigned=$(git -C "$repo" show "refs/remotes/origin/$main_branch:agent-skills.json" 2>/dev/null | jq -r '.server.machine // "none"') || assigned=unknown
     echo "Machine: $machine; assigned server: ${assigned:-unknown}"
+    echo "Library: $repo; format $(library_format || echo unknown), engine supports $supported_format"
     pending=$(git -C "$repo" rev-list --count '@{upstream}..HEAD' 2>/dev/null) || pending=unknown
     echo "Unpublished automatic commits: $pending"
     state="$(git -C "$repo" rev-parse --absolute-git-dir)/agent-skills-publication"

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 
-CLIENT_FILES = ('install.sh', 'install.ps1', 'scripts/client.sh',
+CLIENT_FILES = ('install.sh', 'install.ps1', 'scripts/client.sh', 'scripts/locate.sh', 'scripts/locate.ps1',
                 'scripts/client.ps1', 'scripts/sync-hidden.vbs', 'projects.sh', 'projects.ps1',
                 'scripts/bindings.sh', 'scripts/bindings.ps1', 'README.md', '.gitattributes')
 MANIFEST = '.agent-skills-client.json'

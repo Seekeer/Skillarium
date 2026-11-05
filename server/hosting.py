@@ -18,6 +18,9 @@ import urllib.request
 
 MACHINE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,62}')
 CONFIG = 'agent-skills.json'
+# Highest library format (agent-skills.json "format", absent = 1) this engine
+# understands; keep equal to supported_format in scripts/locate.*.
+SUPPORTED_FORMAT = 1
 BRANCH_PREFIX = 'agent-skills/'
 
 
@@ -72,6 +75,12 @@ def shared_config(repo, revision):
     data = json.loads(result.stdout.decode('utf-8'))
     if data.get('version') != 1 or not isinstance(data.get('server'), dict):
         raise ValueError('Expected agent-skills.json version 1 with a server section')
+    library_format = data.get('format', 1)
+    if type(library_format) is not int or library_format < 1:
+        raise ValueError('Invalid library format in agent-skills.json')
+    if library_format > SUPPORTED_FORMAT:
+        raise ValueError(f'Library format {library_format} needs a newer Skillarium '
+                         f'(this one supports {SUPPORTED_FORMAT}); nothing was changed')
     machine = data['server'].get('machine')
     if machine is not None and (not isinstance(machine, str) or not MACHINE.fullmatch(machine)):
         raise ValueError('Invalid assigned server machine name')
