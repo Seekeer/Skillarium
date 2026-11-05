@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local project bindings of library skills; the backend of the "Projects" UI.
 set -euo pipefail
-engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$engine/scripts/locate.sh"
 usage() {
     cat <<'EOF'

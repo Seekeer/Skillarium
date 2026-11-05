@@ -39,6 +39,10 @@ class ReleaseTests(unittest.TestCase):
             feed = json.loads((Path(first) / 'latest.json').read_text(encoding='utf-8'))
             self.assertEqual(feed['version'], version)
             self.assertEqual(feed['format'], {'min': 1, 'max': 1})
+            self.assertEqual((Path(first) / 'skillarium.sh').read_bytes(),
+                             subprocess.run(['git', '-C', str(ROOT), 'show', 'HEAD:scripts/skillarium.sh'],
+                                            check=True, capture_output=True).stdout)
+            self.assertTrue((Path(first) / 'skillarium.ps1').is_file())
             for platform, file in (('linux', base + '.tar.gz'), ('windows', base + '.zip')):
                 entry = feed['engine'][platform]
                 self.assertEqual(entry['file'], file)

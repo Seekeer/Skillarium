@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install per-user links and an hourly systemd timer.
 set -euo pipefail
-engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+# Logical path: schedules written from an installed engine keep going through current.
+engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$engine/scripts/locate.sh"
 split_library_arg "$@" || exit 2
 set -- ${rest[@]+"${rest[@]}"}

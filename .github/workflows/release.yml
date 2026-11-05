@@ -32,3 +32,5 @@ jobs:
             dist/skillarium-engine-*.zip
             dist/*.sha512
             dist/latest.json
+            dist/skillarium.sh
+            dist/skillarium.ps1

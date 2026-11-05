@@ -3,7 +3,8 @@
 # A managed timer of the former separate agent-skills-updater is switched off
 # first, so old and new maintenance never run side by side.
 set -euo pipefail
-engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+# Logical path: schedules written from an installed engine keep going through current.
+engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$engine/scripts/locate.sh"
 # --repo is the server spelling of --library (manage.py, run.sh).
 arguments=()

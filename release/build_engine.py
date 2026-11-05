@@ -4,8 +4,10 @@
 The engine is the tracked files under ENGINE_PATHS at HEAD. Output (in --out):
   skillarium-engine-<version>.tar.gz  (Linux; keeps executable bits)
   skillarium-engine-<version>.zip     (Windows)
-  <archive>.sha512                    (sha512sum format)
+  skillarium.sh, skillarium.ps1       (bootstrap: releases/latest/download/...)
+  <file>.sha512                       (sha512sum format)
   latest.json                         (feed read by `skillarium self-update`)
+App installers built before (--app) are listed in latest.json as well.
 
 Archives have no top-level folder: the installer unpacks them into
 versions/<version>/. A VERSION file is added at the root.
@@ -27,6 +29,8 @@ ENGINE_PATHS = ('install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', 'scr
                 'templates/', '.codex/skills/', 'README.md', '.gitattributes')
 # Oldest library format this engine still reads (and could migrate from).
 MIN_FORMAT = 1
+DEFAULT_BASE_URL = 'https://github.com/Seekeer/Skillarium/releases/download'
+BOOTSTRAP = ('scripts/skillarium.sh', 'scripts/skillarium.ps1')
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?')
 # Fixed timestamp so the same commit always gives the same archives.
 EPOCH = 315532800  # 1980-01-01, the earliest zip timestamp
@@ -93,43 +97,71 @@ def sha512(path):
     return hashlib.sha512(path.read_bytes()).hexdigest()
 
 
+def entry(path, url):
+    digest = sha512(path)
+    (path.parent / (path.name + '.sha512')).write_text(f'{digest}  {path.name}\n', encoding='utf-8')
+    return {'file': path.name, 'url': f'{url}/{path.name}', 'sha512': digest, 'size': path.stat().st_size}
+
+
+def app_platform(path):
+    if path.suffix == '.exe':
+        return 'windows'
+    if path.suffix == '.AppImage':
+        return 'linux'
+    raise SystemExit(f'Unknown app installer: {path.name}')
+
+
+def build(version, out, base_url=DEFAULT_BASE_URL, apps=(), files=None):
+    """Write the release files of one version into out; returns the feed.
+
+    files (path, mode, bytes) default to the engine at HEAD; apps are app
+    installers already in out (Skillarium-Setup-<v>.exe, Skillarium-<v>.AppImage).
+    """
+    files = sorted((engine_files() if files is None else list(files)) +
+                   [('VERSION', 0o644, (version + '\n').encode())])
+    out.mkdir(parents=True, exist_ok=True)
+    base = f'skillarium-engine-{version}'
+    archives = {'linux': out / f'{base}.tar.gz', 'windows': out / f'{base}.zip'}
+    build_tar(files, archives['linux'])
+    build_zip(files, archives['windows'])
+    # The bootstrap scripts are published on their own: releases/latest/download/skillarium.sh.
+    blobs = {name: data for name, _, data in files}
+    for script in BOOTSTRAP:
+        (out / Path(script).name).write_bytes(blobs[script])
+
+    url = f'{base_url.rstrip("/")}/v{version}'
+    feed = {
+        'version': version,
+        'channel': 'beta' if '-' in version else 'stable',
+        'format': {'min': MIN_FORMAT, 'max': supported_format(files)},
+        'engine': {platform: entry(path, url) for platform, path in archives.items()},
+        'app': {},
+    }
+    for app in apps:
+        app = out / Path(app).name
+        feed['app'][app_platform(app)] = entry(app, url)
+    (out / 'latest.json').write_text(json.dumps(feed, indent=2) + '\n', encoding='utf-8')
+    return feed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--version', required=True, help='Release version without the leading v, e.g. 1.2.0')
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--base-url', default='https://github.com/Seekeer/Skillarium/releases/download',
+    parser.add_argument('--base-url', default=DEFAULT_BASE_URL,
                         help='Download prefix; the tag folder v<version> is appended')
+    parser.add_argument('--app', action='append', default=[], type=Path,
+                        help='App installer in --out to list in latest.json (repeatable)')
     args = parser.parse_args()
     if not VERSION.fullmatch(args.version):
         parser.error('Version must look like 1.2.3 or 1.2.3-beta.1')
     package = json.loads((ROOT / 'app' / 'package.json').read_text(encoding='utf-8'))
     if package['version'] != args.version:
         parser.error(f'app/package.json has version {package["version"]}, not {args.version}')
-
-    files = engine_files() + [('VERSION', 0o644, (args.version + '\n').encode())]
-    files.sort()
-    args.out.mkdir(parents=True, exist_ok=True)
-    base = f'skillarium-engine-{args.version}'
-    archives = {'linux': args.out / f'{base}.tar.gz', 'windows': args.out / f'{base}.zip'}
-    build_tar(files, archives['linux'])
-    build_zip(files, archives['windows'])
-
-    url = f'{args.base_url.rstrip("/")}/v{args.version}'
-    feed = {
-        'version': args.version,
-        'channel': 'beta' if '-' in args.version else 'stable',
-        'format': {'min': MIN_FORMAT, 'max': supported_format(files)},
-        'engine': {},
-    }
-    for platform, path in archives.items():
-        digest = sha512(path)
-        (path.parent / (path.name + '.sha512')).write_text(f'{digest}  {path.name}\n', encoding='utf-8')
-        feed['engine'][platform] = {'file': path.name, 'url': f'{url}/{path.name}', 'sha512': digest,
-                                    'size': path.stat().st_size}
-    (args.out / 'latest.json').write_text(json.dumps(feed, indent=2) + '\n', encoding='utf-8')
-    print(f'Engine {args.version}: {len(files)} files, library formats {MIN_FORMAT}-{feed["format"]["max"]}')
-    for path in archives.values():
-        print(f'  {path.name}  {path.stat().st_size} bytes')
+    feed = build(args.version, args.out, args.base_url, args.app)
+    print(f'Skillarium {args.version}: library formats {feed["format"]["min"]}-{feed["format"]["max"]}')
+    for item in list(feed['engine'].values()) + list(feed['app'].values()):
+        print(f'  {item["file"]}  {item["size"]} bytes')
     return 0
 
 
