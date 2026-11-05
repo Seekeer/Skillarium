@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 from fake_hosting import FakeHosting, protect
 
@@ -18,6 +19,7 @@ CLIENT = ('install.sh', 'install.ps1', 'scripts/client.sh', 'scripts/client.ps1'
           'scripts/locate.sh', 'scripts/locate.ps1', 'scripts/bridge.sh', 'scripts/bridge.ps1',
           'projects.sh', 'projects.ps1', 'scripts/bindings.sh', 'scripts/bindings.ps1',
           'README.md', '.gitattributes', '.gitignore', '.agent-skills-client.json')
+TEST_TASK = 'Skillarium-Test-' + uuid.uuid4().hex
 HAS_BASH_CLIENT = os.name != 'nt' and all(shutil.which(tool) for tool in ('bash', 'jq', 'flock', 'curl'))
 POWERSHELL = (shutil.which('powershell.exe') if os.name == 'nt'
               else os.environ.get('AGENT_SKILLS_PWSH') or shutil.which('pwsh'))
@@ -39,7 +41,9 @@ class Library:
                         GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid',
                         GIT_TERMINAL_PROMPT='0', PYTHONIOENCODING='utf-8',
                         # Legacy-layout syncs would install Skillarium from GitHub; tests/test_bridge.py covers it.
-                        SKILLARIUM_NO_BRIDGE='1')
+                        SKILLARIUM_NO_BRIDGE='1',
+                        # Sync and Install modes change a task of this name: never the user's own.
+                        SKILLARIUM_TASK_NAME=TEST_TASK, SKILLARIUM_UPDATE_TASK=TEST_TASK + '-Update')
         self.upstream = self.root / 'upstream'
         self.upstream.mkdir()
         self.git(self.upstream, 'init', '-q', '-b', 'main')

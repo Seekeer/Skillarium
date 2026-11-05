@@ -70,10 +70,14 @@ ipcMain.handle('choose-folder', async () => {
 });
 // First run: the same steps as `skillarium client`, without downloading the app again.
 ipcMain.handle('connect', async (_event, request) => {
-  const url = text(request?.url).trim();
-  const token = text(request?.token).trim();
-  const folder = text(request?.folder).trim();
-  if (!/^https?:\/\/[^\s@]+$/.test(url) || !path.isAbsolute(folder) || /\s/.test(token)) throw new Error('Invalid connection');
+  const url = String(request?.url || '').trim();
+  const token = String(request?.token || '').trim();
+  const folder = String(request?.folder || '').trim();
+  const problems = [];
+  if (!/^https?:\/\/[^\s@/]+\/[^\s@]+\/[^\s@]+$/.test(url)) problems.push('Адрес библиотеки — ссылка вида https://сервер/владелец/репозиторий.git, без пробелов.');
+  if (!token || /\s/.test(token)) problems.push('Токен — одна строка без пробелов.');
+  if (!path.isAbsolute(folder)) problems.push(`Папка должна быть полным путём, например ${path.join(os.homedir(), 'Skillarium', 'library')}.`);
+  if (problems.length) return { code: 2, messages: problems };
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'skillarium-connect-'));
   try {
     const tokenFile = path.join(temporary, 'token');

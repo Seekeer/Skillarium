@@ -311,6 +311,8 @@ export default function Resolver({ sync, onCancel, onApply }) {
   const openFile = (index) => setSelected(files[(index + files.length) % files.length].path);
   const apply = () => onApply({ upstream: sync.upstream, files: files.map((item) => resolution(item, states[item.path])) });
   const fileDone = resolved(file, state, blocks);
+  // Only this file is left (or nothing is): its button saves everything, there is no next file.
+  const lastToResolve = done - (fileDone ? 1 : 0) >= files.length - 1;
   // Applying a file moves on to the next one still waiting; the last one saves everything.
   const applyFile = () => {
     if (ready) { apply(); return; }
@@ -426,12 +428,16 @@ export default function Resolver({ sync, onCancel, onApply }) {
         </main>
         <footer className="merge-footer">
           <span className="progress">Итог выбран для {done} из {files.length} файлов</span>
-          <Action label="Предыдущий файл" keys="Alt+PgUp" onClick={() => openFile(fileIndex - 1)} />
-          <Action label="Следующий файл" keys="Alt+PgDn" onClick={() => openFile(fileIndex + 1)} />
-          <span className="merge-sep" />
+          {files.length > 1 && (
+            <>
+              <Action label="Предыдущий файл" keys="Alt+PgUp" onClick={() => openFile(fileIndex - 1)} />
+              <Action label="Следующий файл" keys="Alt+PgDn" onClick={() => openFile(fileIndex + 1)} />
+              <span className="merge-sep" />
+            </>
+          )}
           <Action label="Отмена" keys="Esc" onClick={cancel} />
           <button type="button" className="primary apply" disabled={!ready && !fileDone} onClick={applyFile}>
-            {ready ? 'Применить всё' : 'Применить и к следующему файлу'} <Keys>Ctrl+Enter</Keys>
+            {lastToResolve ? 'Применить всё' : 'Применить и к следующему файлу'} <Keys>Ctrl+Enter</Keys>
           </button>
         </footer>
       </div>

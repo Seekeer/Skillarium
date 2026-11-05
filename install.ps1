@@ -14,7 +14,8 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 $engine = $PSScriptRoot
 . (Join-Path $engine 'scripts\locate.ps1')
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$taskName = "AgentSkills-Hourly-$($identity.User.Value)"
+# SKILLARIUM_TASK_NAME keeps tests (and side-by-side installations) off the user's own task.
+$taskName = if ($env:SKILLARIUM_TASK_NAME) { $env:SKILLARIUM_TASK_NAME } else { "AgentSkills-Hourly-$($identity.User.Value)" }
 if ($Mode -eq 'Uninstall') {
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($task) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 from fake_releases import FakeReleases
-from fixture import HAS_BASH_CLIENT, POWERSHELL, ROOT
+from fixture import HAS_BASH_CLIENT, POWERSHELL, ROOT, TEST_TASK
 
 WINDOWS = os.name == 'nt'
 
@@ -121,6 +121,7 @@ class PowerShellEngineInstallTests(EngineInstall, unittest.TestCase):
     def run_skillarium(self, *args, expected=0, env=None):
         arguments = [{'--channel': '-Channel', '--version': '-Version'}.get(item, item) for item in args]
         environment = dict(os.environ, SKILLARIUM_HOME=str(self.home), APPDATA=str(self.root / 'appdata'),
+                           SKILLARIUM_TASK_NAME=TEST_TASK, SKILLARIUM_UPDATE_TASK=TEST_TASK + '-Update',
                            **self.releases.env(), **(env or {}))
         if not env:
             environment.pop('SKILLARIUM_LIBRARY', None)

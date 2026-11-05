@@ -207,3 +207,12 @@
 
 .merge-footer { grid-area: foot; display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 10px 20px; border-top: 1px solid var(--line); }
 .progress { margin-right: auto; color: var(--muted); }
+
+/* Small windows: the shortcut list gives its room to the versions and the result. */
+@media (max-height: 760px), (max-width: 980px) {
+  .merge-keys { display: none; }
+  .merge-header p { display: none; }
+}
+@media (max-width: 980px) {
+  .merge { grid-template-columns: 180px minmax(0, 1fr); }
+}

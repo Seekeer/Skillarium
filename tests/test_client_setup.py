@@ -13,7 +13,7 @@ import unittest
 
 from fake_gitea import FakeGitea
 from fake_releases import FakeReleases
-from fixture import HAS_BASH_CLIENT, POWERSHELL, ROOT
+from fixture import HAS_BASH_CLIENT, POWERSHELL, ROOT, TEST_TASK
 
 WINDOWS = os.name == 'nt'
 SKILL = '---\nname: first-skill\ndescription: A skill of the library\n---\n\nShared text\n'
@@ -42,7 +42,8 @@ class ClientSetup:
                         SKILLARIUM_HOME=str(self.root / 'engine'), SKILLARIUM_BIN=str(self.root / 'bin'),
                         GIT_CONFIG_GLOBAL=str(self.gitconfig), GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
                         GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@localhost',
-                        GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@localhost', **self.releases.env())
+                        GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@localhost',
+                        SKILLARIUM_TASK_NAME=TEST_TASK, SKILLARIUM_UPDATE_TASK=TEST_TASK + '-Update', **self.releases.env())
         self.env.pop('SKILLARIUM_LIBRARY', None)
         self.gitea.create_repo('alice', 'skills')
         work = self.root / 'seed'

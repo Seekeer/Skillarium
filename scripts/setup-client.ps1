@@ -100,54 +100,61 @@ function Install-App {
     } finally { [IO.Directory]::Delete($folder, $true) }
 }
 
-$target = Split-LibraryUrl $Library
-$url = "$($target.Base)/$($target.Owner)/$($target.Name).git"
-$api = "$($target.Base)/api/v1"
-$Path = [IO.Path]::GetFullPath($Path)
-$token = Read-Token
-$user = Invoke-Gitea $api $token '/user'
-$repository = Invoke-Gitea $api $token "/repos/$($target.Owner)/$($target.Name)"
-if (-not $repository.permissions.push) { throw "The token of $($user.login) cannot write to $($target.Owner)/$($target.Name)." }
-Save-Credential $target $user.login $token
-Remove-Variable token
+try {
+    $target = Split-LibraryUrl $Library
+    $url = "$($target.Base)/$($target.Owner)/$($target.Name).git"
+    $api = "$($target.Base)/api/v1"
+    $Path = [IO.Path]::GetFullPath($Path)
+    $token = Read-Token
+    $user = Invoke-Gitea $api $token '/user'
+    $repository = Invoke-Gitea $api $token "/repos/$($target.Owner)/$($target.Name)"
+    if (-not $repository.permissions.push) { throw "The token of $($user.login) cannot write to $($target.Owner)/$($target.Name)." }
+    Save-Credential $target $user.login $token
+    Remove-Variable token
 
-if (Test-Path -LiteralPath (Join-Path $Path '.git')) {
-    $origin = Invoke-Git -GitArgs @('-C', $Path, 'config', '--get', 'remote.origin.url') -Quiet
-    $existing = $null
-    try { $existing = Split-LibraryUrl $origin } catch { }
-    if (-not $existing -or $existing.Owner -ne $target.Owner -or $existing.Name -ne $target.Name) {
-        throw "$Path is a clone of $origin, not of $url; pass -Path."
+    if (Test-Path -LiteralPath (Join-Path $Path '.git')) {
+        $origin = Invoke-Git -GitArgs @('-C', $Path, 'config', '--get', 'remote.origin.url') -Quiet
+        $existing = $null
+        try { $existing = Split-LibraryUrl $origin } catch { }
+        if (-not $existing -or $existing.Owner -ne $target.Owner -or $existing.Name -ne $target.Name) {
+            throw "$Path is a clone of $origin, not of $url; pass -Path."
+        }
+        Write-Output "Existing clone kept: $Path"
+    } elseif ((Test-Path -LiteralPath $Path) -and @(Get-ChildItem -LiteralPath $Path -Force).Count) {
+        throw "$Path exists and is not a clone; pass -Path."
+    } else {
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
+        Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'clone', '-q', $url, $Path) | Out-Null
+        Write-Output "Library cloned into $Path"
     }
-    Write-Output "Existing clone kept: $Path"
-} elseif ((Test-Path -LiteralPath $Path) -and @(Get-ChildItem -LiteralPath $Path -Force).Count) {
-    throw "$Path exists and is not a clone; pass -Path."
-} else {
-    [IO.Directory]::CreateDirectory((Split-Path -Parent $Path)) | Out-Null
-    Invoke-Git -GitArgs @('-c', 'credential.interactive=false', 'clone', '-q', $url, $Path) | Out-Null
-    Write-Output "Library cloned into $Path"
-}
-if (-not (Test-Path -LiteralPath (Join-Path $Path 'agent-skills.json')) -or -not (Test-Path -LiteralPath (Join-Path $Path 'sources.json'))) {
-    throw "$url is not a skill library."
-}
-if ($Machine) { Invoke-Git -GitArgs @('-C', $Path, 'config', 'agent-skills.machine', $Machine) | Out-Null }
+    if (-not (Test-Path -LiteralPath (Join-Path $Path 'agent-skills.json')) -or -not (Test-Path -LiteralPath (Join-Path $Path 'sources.json'))) {
+        throw "$url is not a skill library."
+    }
+    if ($Machine) { Invoke-Git -GitArgs @('-C', $Path, 'config', 'agent-skills.machine', $Machine) | Out-Null }
 
-$configPath = Join-Path $env:APPDATA 'Skillarium\config.json'
-$config = [ordered]@{}
-if (Test-Path -LiteralPath $configPath) {
-    (Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $config[$_.Name] = $_.Value }
-}
-$config['library'] = $Path
-[IO.Directory]::CreateDirectory((Split-Path -Parent $configPath)) | Out-Null
-[IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+    $configPath = Join-Path $env:APPDATA 'Skillarium\config.json'
+    $config = [ordered]@{}
+    if (Test-Path -LiteralPath $configPath) {
+        (Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $config[$_.Name] = $_.Value }
+    }
+    $config['library'] = $Path
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $configPath)) | Out-Null
+    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 
-$app = $null
-if (-not $NoApp -and -not $FromApp) { $app = Install-App }
-$mode = if ($NoSchedule) { 'Sync' } else { 'Install' }
-& (Join-Path $engine 'install.ps1') -Mode $mode -Library $Path
-if (-not $?) { throw 'Linking the skills failed; see the messages above.' }
-# Without the app nothing else updates the engine.
-if ($NoApp -and -not $FromApp -and -not $NoSchedule) {
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $engine 'scripts\skillarium.ps1') enable-updates
+    $app = $null
+    if (-not $NoApp -and -not $FromApp) { $app = Install-App }
+    $mode = if ($NoSchedule) { 'Sync' } else { 'Install' }
+    & (Join-Path $engine 'install.ps1') -Mode $mode -Library $Path
+    if (-not $?) { throw 'Linking the skills failed; see the messages above.' }
+    # Without the app nothing else updates the engine.
+    if ($NoApp -and -not $FromApp -and -not $NoSchedule) {
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $engine 'scripts\skillarium.ps1') enable-updates
+    }
+    if ($app -and -not $NoLaunch -and (Test-Path -LiteralPath $app)) { Start-Process -FilePath $app }
+    Write-Output "CONNECTED: $url in $Path"
+} catch {
+    # One plain line for the terminal and the app, not a PowerShell error record.
+    [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+    exit 1
 }
-if ($app -and -not $NoLaunch -and (Test-Path -LiteralPath $app)) { Start-Process -FilePath $app }
-Write-Output "CONNECTED: $url in $Path"
+exit 0

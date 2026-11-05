@@ -257,7 +257,8 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wP
     Write-Output "Added $bin to the user PATH; new terminals find skillarium."
 }
 
-$updateTask = 'Skillarium-Update-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$updateTask = if ($env:SKILLARIUM_UPDATE_TASK) { $env:SKILLARIUM_UPDATE_TASK } else {
+    'Skillarium-Update-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
 
 # Hourly self-update for machines without the app (the app updates itself and its engine).
 function Enable-Updates {
@@ -382,6 +383,7 @@ try {
             if (-not (Get-CurrentVersion)) { Invoke-Install @() }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
+            $code = $LASTEXITCODE
         }
         { $_ -in @('help', '--help', '-h', '-Help') } { Show-Usage }
         default { Show-Usage; $code = 2 }

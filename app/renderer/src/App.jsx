@@ -5,6 +5,23 @@ import mark from '../../../assets/brand/skillarium-icon.svg';
 
 const api = window.skills;
 
+// Electron prefixes errors of the main process; the user needs only the reason.
+const reason = (error) => String(error?.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+
+// Known failures of the client setup, said in plain words; the raw lines stay below.
+function explainConnect(messages) {
+  const text = messages.join('\n');
+  if (/answered 401|rejected the token/.test(text)) return 'Gitea не принял токен. Проверьте, что он скопирован целиком и не истёк.';
+  if (/cannot write to/.test(text)) return 'У этого токена нет права записи в библиотеку. Попросите токен служебного бота или доступ на запись.';
+  if (/answered 404|cannot read/.test(text)) return 'Библиотека по этому адресу не найдена (или токен её не видит). Проверьте адрес.';
+  if (/is a clone of|exists and is not a clone/.test(text)) return 'Выбранная папка уже занята другим содержимым. Укажите пустую или новую папку.';
+  if (/is not a skill library/.test(text)) return 'По этому адресу репозиторий, но не библиотека скиллов.';
+  if (/Unable to connect|could not be resolved|remote name|No connection|timed out|actively refused|answered [^0-9]/i.test(text)) {
+    return 'Сервер Gitea по этому адресу не отвечает. Проверьте адрес и сеть.';
+  }
+  return 'Подключить библиотеку не удалось.';
+}
+
 function Modal({ title, children, onCancel }) {
   const box = useRef(null);
   useEffect(() => {
@@ -91,11 +108,14 @@ function Connect({ library, onConnected, onChoose }) {
       if (result.code === 0) {
         setToken('');
         onConnected();
+      } else if (result.code === 2) {
+        setFailure({ title: 'Проверьте поля формы.', details: result.messages });
       } else {
-        setFailure(result.messages);
+        const details = result.messages.map((line) => line.replace(/^ERROR: /, ''));
+        setFailure({ title: explainConnect(details), details });
       }
     } catch (error) {
-      setFailure([String(error?.message || error)]);
+      setFailure({ title: 'Подключить библиотеку не удалось.', details: [reason(error)] });
     } finally {
       setWorking(false);
     }
@@ -133,8 +153,8 @@ function Connect({ library, onConnected, onChoose }) {
       </form>
       {failure && (
         <div className="notice error" role="alert">
-          <p>Подключить библиотеку не удалось.</p>
-          {failure.length > 0 && <pre>{failure.join('\n')}</pre>}
+          <p>{failure.title}</p>
+          {failure.details.length > 0 && <pre>{failure.details.join('\n')}</pre>}
         </div>
       )}
       <button type="button" className="quiet" onClick={onChoose} disabled={working}>У меня уже есть клон — выбрать папку</button>
@@ -193,7 +213,7 @@ export default function App() {
       const result = await call();
       if (result) handle(result);
     } catch (error) {
-      setNotice({ tone: 'error', text: String(error?.message || error) });
+      setNotice({ tone: 'error', text: reason(error) });
     } finally {
       await refresh();
       setBusy(null);
@@ -208,7 +228,13 @@ export default function App() {
 
   async function chooseLibrary() {
     const picked = await api.chooseLibrary();
-    if (picked) setLibrary(picked);
+    if (!picked) return;
+    // A wrong folder never replaces a working library: say why and stay.
+    if (!picked.valid && library?.valid) {
+      setNotice({ tone: 'error', text: `В папке ${picked.path} нет библиотеки скиллов: в ней должны быть sources.json и agent-skills.json. Библиотека не изменилась.` });
+      return;
+    }
+    setLibrary(picked);
   }
 
   const bind = (project, name) => act(`${project.path}|${name}`, () => api.bind(project.path, name),

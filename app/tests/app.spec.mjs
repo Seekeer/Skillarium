@@ -42,6 +42,9 @@ function makeFixture() {
     GIT_CONFIG_GLOBAL: windows ? 'NUL' : '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
     SKILLARIUM_NO_BRIDGE: '1',
+    // Sync and Install modes change a scheduled task of this name: never the user's own.
+    SKILLARIUM_TASK_NAME: `Skillarium-Test-${path.basename(root).replace(/\W/g, '')}`,
+    SKILLARIUM_UPDATE_TASK: `Skillarium-Test-${path.basename(root).replace(/\W/g, '')}-Update`,
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
     GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid',
   };
@@ -326,7 +329,8 @@ test('first run offers to connect a library and reports a failed connection', as
   await form.getByLabel('Токен Gitea').fill('not-a-token');
   await form.getByRole('button', { name: 'Подключить' }).click();
   // The engine's client setup runs and fails before changing anything: nothing listens there.
-  await expect(page.getByRole('alert')).toContainText('Подключить библиотеку не удалось');
+  await expect(page.getByRole('alert')).toContainText('Сервер Gitea по этому адресу не отвечает');
+  await expect(page.getByRole('alert')).not.toContainText('FullyQualifiedErrorId');
   expect(fs.existsSync(path.join(fixture.home, 'Skillarium', 'library'))).toBe(false);
   // An existing clone can still be chosen instead.
   await answerFolderPicker(app, fixture.library);
