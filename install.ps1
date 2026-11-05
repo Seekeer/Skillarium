@@ -82,7 +82,7 @@ try {
         }
         # The engine runs the library given here; the legacy layout keeps its old arguments.
         $taskArguments = "//B //NoLogo `"$launcher`""
-        if ($engine.TrimEnd('\') -ne $repo) { $taskArguments += " `"$repo`"" }
+        if ((Get-LongPath $engine) -ne $repo) { $taskArguments += " `"$repo`"" }
         $action = New-ScheduledTaskAction -Execute $hostPath -Argument $taskArguments -WorkingDirectory $repo
     }
     if ($Mode -eq 'Install') {

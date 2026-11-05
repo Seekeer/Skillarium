@@ -24,7 +24,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATHS = ('install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', 'scripts/', 'server/',
-                'templates/', 'README.md', '.gitattributes')
+                'templates/', '.codex/skills/', 'README.md', '.gitattributes')
+# Oldest library format this engine still reads (and could migrate from).
+MIN_FORMAT = 1
 VERSION = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?')
 # Fixed timestamp so the same commit always gives the same archives.
 EPOCH = 315532800  # 1980-01-01, the earliest zip timestamp
@@ -53,12 +55,13 @@ def engine_files():
     return sorted(files)
 
 
-def supported_format():
-    text = (ROOT / 'server' / 'hosting.py').read_text(encoding='utf-8')
-    value = int(re.search(r'^SUPPORTED_FORMAT = (\d+)$', text, re.M).group(1))
+def supported_format(files):
+    """The library format of the archived files; all three engine copies must agree."""
+    text = {name: data.decode('utf-8') for name, _, data in files}
+    value = int(re.search(r'^SUPPORTED_FORMAT = (\d+)$', text['server/hosting.py'], re.M).group(1))
     for script, pattern in (('scripts/locate.sh', r'^supported_format=(\d+)$'),
                             ('scripts/locate.ps1', r'^\$supportedFormat = (\d+)\s*$')):
-        found = int(re.search(pattern, (ROOT / script).read_text(encoding='utf-8'), re.M).group(1))
+        found = int(re.search(pattern, text[script], re.M).group(1))
         if found != value:
             raise SystemExit(f'Supported format differs: server/hosting.py {value}, {script} {found}')
     return value
@@ -115,7 +118,7 @@ def main():
     feed = {
         'version': args.version,
         'channel': 'beta' if '-' in args.version else 'stable',
-        'format': supported_format(),
+        'format': {'min': MIN_FORMAT, 'max': supported_format(files)},
         'engine': {},
     }
     for platform, path in archives.items():
@@ -124,7 +127,7 @@ def main():
         feed['engine'][platform] = {'file': path.name, 'url': f'{url}/{path.name}', 'sha512': digest,
                                     'size': path.stat().st_size}
     (args.out / 'latest.json').write_text(json.dumps(feed, indent=2) + '\n', encoding='utf-8')
-    print(f'Engine {args.version}: {len(files)} files, format {feed["format"]}')
+    print(f'Engine {args.version}: {len(files)} files, library formats {MIN_FORMAT}-{feed["format"]["max"]}')
     for path in archives.values():
         print(f'  {path.name}  {path.stat().st_size} bytes')
     return 0

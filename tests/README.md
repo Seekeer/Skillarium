@@ -77,12 +77,6 @@ application URL, test identity, or database is required. Linux verification can
 also run in an isolated container with Git, Python, Bash, jq, curl and flock,
 using a temporary copy of the repository rather than the installed client.
 
-Gitea context comes from `origin` (`dim/agent-skills` on
-`https://gitea.example.org`). Reuse the matching authenticated global
-`tea` login / Git credential helper; never store tokens in this repository.
-Read an issue with `tea api repos/dim/agent-skills/issues/<number> --remote origin`.
-For comments, write UTF-8 JSON to a temporary file and use
-`tea api repos/dim/agent-skills/issues/<number>/comments --remote origin -d @<file>`.
-Read the comment back, and close a ticket only after all its acceptance checks
-are complete. Live branch-protection tests require a separate test repository;
+Issues live on GitHub (`Seekeer/Skillarium`); never store tokens in this
+repository. Close a ticket only after all its acceptance checks are complete. Live branch-protection tests require a separate test repository;
 local fake-hosting results do not establish real Gitea runner availability.

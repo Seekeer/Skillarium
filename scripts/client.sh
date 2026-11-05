@@ -319,6 +319,7 @@ publication_state() {
 # exactly one pull request with automatic merge exists for it.
 publish_proposal() {
     local head branch machine id found number title body
+    assert_writable || return 1
     head=$(git -C "$repo" rev-parse HEAD) || return 1
     machine=$(machine_name) || return 1
     id=$(clone_id) || return 1
@@ -355,8 +356,7 @@ sync_repository() {
     git -C "$repo" symbolic-ref -q HEAD >/dev/null || return 1
     git -C "$repo" rev-parse --verify -q '@{upstream}' >/dev/null || return 1
     # A library migrated past this engine is used as is: no commits, merges or publications.
-    assert_format || return 1
-    assert_format '@{upstream}' || return 1
+    assert_writable || return 1
     assert_automatic_commits || return 1
     migrate_legacy_links || return 1
     publish_local_changes || return 1
@@ -540,6 +540,7 @@ proposal_for() {
 
 approve_update() {
     local name=$1 commit=$2 proposal_message proposal_branch
+    assert_writable "$commit" || return 1
     proposal_for "$name" "$commit" || return 1
     [[ $(trailer "$proposal_message" Status) == confirm ]] || {
         echo 'Conflicts need --resolve with keep-ours, take-upstream or merged.' >&2; return 1;
@@ -550,6 +551,7 @@ approve_update() {
 
 resolve_update() {
     local name=$1 commit=$2 strategy=$3 proposal_message proposal_branch target worktree head temporary
+    assert_writable "$commit" || return 1
     proposal_for "$name" "$commit" || return 1
     worktree="$(git -C "$repo" rev-parse --absolute-git-dir)/agent-skills-review/$name"
     case "$strategy" in
@@ -709,6 +711,7 @@ cmd_resolve() {
     jq -e '(.upstream | type == "string") and (.files | type == "array")' "$resolve_request" >/dev/null || {
         echo 'Invalid resolution request.' >&2; return 1;
     }
+    assert_writable || return 1
     assert_automatic_commits || return 1
     publish_local_changes || return 1
     revisions=$(diverged_revisions) || return 1

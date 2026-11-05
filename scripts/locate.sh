@@ -50,8 +50,10 @@ library_format() {
     else
         text=$(cat -- "$repo/agent-skills.json") || return 1
     fi
-    format=$(jq -r '.format // 1' <<< "$text") || return 1
-    [[ "$format" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid library format: $format" >&2; return 1; }
+    # Same rule as the PowerShell client and the server: absent or null is 1, else a whole number >= 1.
+    format=$(jq -r '.format | if . == null then 1 elif type == "number" and . >= 1 and . == floor then . else "invalid: \(tojson)" end' \
+        <<< "$text") || return 1
+    [[ "$format" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid library format: ${format#invalid: }" >&2; return 1; }
     printf '%s\n' "$format"
 }
 
@@ -63,6 +65,25 @@ assert_format() {
         echo "READ-ONLY: library format $format needs a newer Skillarium (this one supports $supported_format); skills keep working, edits stay local until you update." >&2
         return 1
     fi
+}
+
+# Merges, commits and publications need the working tree, the shared branch
+# and any given revision (a proposal) in a format this engine understands.
+assert_writable() {
+    local revision
+    assert_format || return 1
+    if git -C "$repo" rev-parse --verify -q '@{upstream}' >/dev/null 2>&1; then
+        assert_format '@{upstream}' || return 1
+    fi
+    for revision in "$@"; do assert_format "$revision" || return 1; done
+}
+
+# A value for a systemd unit line: quoted, with \, ", % and $ escaped.
+unit_quote() {
+    local value=$1
+    value=${value//\\/\\\\}; value=${value//\"/\\\"}
+    value=${value//%/%%}; value=${value//\$/\$\$}
+    printf '"%s"' "$value"
 }
 
 # Splits --library <folder> / --library=<folder> out of the arguments;

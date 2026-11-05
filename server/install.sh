@@ -5,7 +5,16 @@
 set -euo pipefail
 engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 source "$engine/scripts/locate.sh"
-split_library_arg "$@" || exit 2
+# --repo is the server spelling of --library (manage.py, run.sh).
+arguments=()
+for argument in "$@"; do
+    case "$argument" in
+        --repo) argument=--library ;;
+        --repo=*) argument=--library=${argument#--repo=} ;;
+    esac
+    arguments+=("$argument")
+done
+split_library_arg ${arguments[@]+"${arguments[@]}"} || exit 2
 set -- ${rest[@]+"${rest[@]}"}
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 marker='# Managed by agent-skills-server'
@@ -14,7 +23,7 @@ mode=${1:---install}
 machine=${2:-}
 case "$mode" in
     --install|--uninstall) ;;
-    *) echo 'Usage: bash server/install.sh [--library <folder>] [--install [<machine-name>]|--uninstall]' >&2; exit 2 ;;
+    *) echo 'Usage: bash server/install.sh [--repo <library folder>] [--install [<machine-name>]|--uninstall]' >&2; exit 2 ;;
 esac
 
 remove_managed() {
@@ -55,12 +64,6 @@ if [[ -f "$unit_dir/agent-skills-updater.timer" ]]; then
     systemctl --user stop agent-skills-updater.service || true
     remove_managed "$legacy_marker" agent-skills-updater.service agent-skills-updater.timer
 fi
-unit_quote() {
-    local value=$1
-    value=${value//\\/\\\\}; value=${value//\"/\\\"}
-    value=${value//%/%%}; value=${value//\$/\$\$}
-    printf '"%s"' "$value"
-}
 # The engine runs the library given here; the legacy layout keeps its old line.
 exec_start="/usr/bin/bash $(unit_quote "$engine/server/run.sh")"
 if [[ "$engine" != "$library" ]]; then exec_start+=" --repo $(unit_quote "$library")"; fi

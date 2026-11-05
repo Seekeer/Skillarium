@@ -61,12 +61,6 @@ if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install ]]; then exit 0; fi
 
 # Quote systemd ExecStart syntax, including its percent and dollar expansion.
-unit_quote() {
-    local value=$1
-    value=${value//\\/\\\\}; value=${value//\"/\\\"}
-    value=${value//%/%%}; value=${value//\$/\$\$}
-    printf '"%s"' "$value"
-}
 # The engine runs the library given here; the legacy layout keeps its old line.
 exec_start="/usr/bin/bash $(unit_quote "$engine/install.sh")"
 if [[ "$engine" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi

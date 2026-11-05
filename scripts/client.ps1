@@ -362,6 +362,7 @@ function Set-PublicationState {
 # Push local automatic commits to this clone's proposal branch and make sure
 # exactly one pull request with automatic merge exists for it.
 function Publish-Proposal {
+    Assert-LibraryWritable
     $head = [string](Invoke-Git -GitArgs @('rev-parse', 'HEAD'))
     $machine = Get-MachineName
     $branch = "agent-skills/sync/$machine-$(Get-CloneId)"
@@ -396,8 +397,7 @@ function Sync-Repository {
     Invoke-Git -GitArgs @('symbolic-ref', '-q', 'HEAD') | Out-Null
     Invoke-Git -GitArgs @('rev-parse', '--verify', '-q', '@{upstream}') | Out-Null
     # A library migrated past this engine is used as is: no commits, merges or publications.
-    Assert-LibraryFormat
-    Assert-LibraryFormat '@{upstream}'
+    Assert-LibraryWritable
     Assert-AutomaticCommits
     Migrate-LegacyLinks
     Publish-LocalChanges
@@ -600,6 +600,7 @@ function Approve-Proposal {
 
 function Approve-Update {
     param([string]$Name, [string]$Commit)
+    Assert-LibraryWritable -Revisions @($Commit)
     $proposal = Get-Proposal -Name $Name -Commit $Commit
     if ((Get-Trailer $proposal.Message 'Status') -ne 'confirm') { throw 'Conflicts need -Mode Resolve with keep-ours, take-upstream or merged.' }
     Approve-Proposal -Name $Name -Branch $proposal.Branch -Head $Commit -Result (Get-Trailer $proposal.Message 'Result-Tree') -Incoming (Get-Trailer $proposal.Message 'Incoming-Tree')
@@ -607,6 +608,7 @@ function Approve-Update {
 
 function Resolve-Update {
     param([string]$Name, [string]$Commit, [string]$Strategy)
+    Assert-LibraryWritable -Revisions @($Commit)
     $proposal = Get-Proposal -Name $Name -Commit $Commit
     $worktree = Get-ReviewPath -Name $Name
     switch ($Strategy) {
@@ -753,6 +755,7 @@ function Invoke-Resolve {
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
+    Assert-LibraryWritable
     Assert-AutomaticCommits
     Publish-LocalChanges
     $revisions = Get-DivergedRevisions

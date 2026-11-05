@@ -1,8 +1,10 @@
 name: Library policy
 
 # Required status check of the protected main branch. pull_request_target runs
-# the rule from the base branch, so a proposal cannot change its own check or
-# the server assignment it is checked against.
+# the rule from the base branch, so a proposal cannot change its own check, the
+# server assignment or the pinned policy engine it is checked against. The
+# policy comes from the Skillarium release in agent-skills.json "policy_engine"
+# (version and sha512 of its tar.gz), set by the server installer.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -15,10 +17,21 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
+      - name: Download the pinned Skillarium policy
+        run: |
+          read -r version digest < <(python3 -c 'import json; p = json.load(open("agent-skills.json")).get("policy_engine") or {}; print(p.get("version") or "-", p.get("sha512") or "-")')
+          if [ "$version" = - ] || [ "$digest" = - ]; then
+            echo 'agent-skills.json has no policy_engine version and sha512; run the Skillarium server installer.' >&2; exit 1
+          fi
+          archive="skillarium-engine-$version.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" "https://github.com/Seekeer/Skillarium/releases/download/v$version/$archive"
+          echo "$digest  $RUNNER_TEMP/$archive" | sha512sum -c -
+          mkdir -p "$RUNNER_TEMP/skillarium"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/skillarium"
       - name: Accept skill content from any machine, control data only from the assigned server
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
           NUMBER: ${{ github.event.pull_request.number }}
         run: |
           git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/base" "+refs/pull/$NUMBER/head:refs/remotes/origin/proposal"
-          python3 server/policy.py --repo . --base refs/remotes/origin/base --head refs/remotes/origin/proposal
+          python3 "$RUNNER_TEMP/skillarium/server/policy.py" --repo . --base refs/remotes/origin/base --head refs/remotes/origin/proposal

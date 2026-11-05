@@ -43,7 +43,7 @@ class EngineLayout:
     def run_client(self, mode, library=None, env=None, expected=0):
         raise NotImplementedError
 
-    def run_projects(self, *args, library=None, expected=0):
+    def run_projects(self, *args, library=None, expected=0, raw=False):
         raise NotImplementedError
 
     def raise_format(self, local=False):
@@ -112,6 +112,21 @@ class EngineLayout:
         self.assertEqual(Path(status['library']).resolve(), self.client.resolve())
         self.assertEqual(status['format'], {'library': 1, 'supported': 1, 'readOnly': False})
 
+    def test_status_without_origin_reads_the_working_tree(self):
+        self.lib.git(self.client, 'remote', 'remove', 'origin')
+        status = self.run_projects('status', library=self.client)
+        self.assertEqual(status['format'], {'library': 1, 'supported': 1, 'readOnly': False})
+
+    def test_conflict_resolution_is_refused_for_a_newer_format(self):
+        self.run_client('sync', library=self.client)
+        self.raise_format(local=True)
+        head = self.lib.git(self.client, 'rev-parse', 'HEAD')
+        request = self.lib.root / 'resolve.json'
+        request.write_text(json.dumps({'upstream': head, 'files': []}), encoding='utf-8')
+        output = self.run_projects('resolve', str(request), library=self.client, expected=None, raw=True)
+        self.assertIn('READ-ONLY: library format 2', output)
+        self.assertEqual(self.lib.git(self.client, 'rev-parse', 'HEAD'), head)
+
 
 @unittest.skipUnless(WINDOWS and POWERSHELL, 'Windows PowerShell unavailable')
 class PowerShellEngineLayoutTests(EngineLayout, unittest.TestCase):
@@ -130,9 +145,11 @@ class PowerShellEngineLayoutTests(EngineLayout, unittest.TestCase):
             arguments += ['-Library', str(library)]
         return self.powershell('install.ps1', arguments, self.env(**(env or {})), expected)[1]
 
-    def run_projects(self, *args, library=None, expected=0):
+    def run_projects(self, *args, library=None, expected=0, raw=False):
         arguments = (['-Library', str(library)] if library else []) + list(args)
-        result, _ = self.powershell('projects.ps1', arguments, self.env(), expected)
+        result, output = self.powershell('projects.ps1', arguments, self.env(), expected)
+        if raw:
+            return output
         return json.loads([line for line in result.stdout.splitlines() if line.startswith('{')][-1])
 
 
@@ -150,9 +167,11 @@ class BashEngineLayoutTests(EngineLayout, unittest.TestCase):
         arguments = (['--library', str(library)] if library else []) + [{'sync': '--sync-only', 'status': '--status'}[mode]]
         return self.bash('install.sh', arguments, self.env(**(env or {})), expected)[1]
 
-    def run_projects(self, *args, library=None, expected=0):
+    def run_projects(self, *args, library=None, expected=0, raw=False):
         arguments = (['--library', str(library)] if library else []) + list(args)
-        result, _ = self.bash('projects.sh', arguments, self.env(), expected)
+        result, output = self.bash('projects.sh', arguments, self.env(), expected)
+        if raw:
+            return output
         return json.loads([line for line in result.stdout.splitlines() if line.startswith('{')][-1])
 
 

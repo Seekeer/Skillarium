@@ -421,8 +421,8 @@ cmd_status() {
             '{name: $n, global: ($g + {links: $l}), projects: []}')")
     done <<<"$names"
     local here remote
-    here=$(library_format) || here=1
-    remote=$(library_format "refs/remotes/origin/$main_branch") || remote=1
+    here=$(library_format) || return 1
+    remote=$(library_format "refs/remotes/origin/$main_branch") || return 1
     printf '%s\n' "${projects[@]}" | jq -cs --arg library "$repo" --arg file "$bindings_file" \
         --argjson format "$(( here > remote ? here : remote ))" --argjson supported "$supported_format" \
         --argjson skills "$(printf '%s\n' "${rows[@]}" | jq -cs 'map(select(. != null))')" '

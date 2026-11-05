@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   linux:
@@ -64,10 +65,3 @@ jobs:
       - name: Electron UI tests
         if: runner.os == 'Windows'
         run: npm test
-
-  release-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Engine archives build from the current version
-        run: python3 release/build_engine.py --version "$(jq -r .version app/package.json)" --out dist

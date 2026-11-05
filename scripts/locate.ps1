@@ -60,8 +60,12 @@ function Get-LongPath {
 function Get-LibraryFormat {
     param([string]$Revision)
     if ($Revision) {
-        $text = (& git -C $repo show "${Revision}:agent-skills.json" 2>$null) -join "`n"
-        if ($LASTEXITCODE -ne 0) { return 1 }
+        # A missing revision (no origin yet) is format 1; git's error must not throw under Stop.
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { $text = (& git -C $repo show "${Revision}:agent-skills.json" 2>$null) -join "`n"; $code = $LASTEXITCODE }
+        finally { $ErrorActionPreference = $previous }
+        if ($code -ne 0) { return 1 }
     } else {
         $text = Get-Content -LiteralPath (Join-Path $repo 'agent-skills.json') -Raw -Encoding UTF8
     }
@@ -69,6 +73,19 @@ function Get-LibraryFormat {
     if ($null -eq $format) { return 1 }
     if ($format -isnot [int] -and $format -isnot [long] -or $format -lt 1) { throw "Invalid library format: $format" }
     return [int]$format
+}
+
+# Merges, commits and publications need the working tree, the shared branch
+# and any given revision (a proposal) in a format this engine understands.
+function Assert-LibraryWritable {
+    param([string[]]$Revisions = @())
+    Assert-LibraryFormat
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & git -C $repo rev-parse --verify -q '@{upstream}' 2>$null | Out-Null; $code = $LASTEXITCODE }
+    finally { $ErrorActionPreference = $previous }
+    if ($code -eq 0) { Assert-LibraryFormat '@{upstream}' }
+    foreach ($revision in $Revisions) { Assert-LibraryFormat $revision }
 }
 
 # Throws a clear message when the library needs a newer Skillarium.

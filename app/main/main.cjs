@@ -25,11 +25,11 @@ function engineConfig() {
   try { return JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')); } catch { return {}; }
 }
 
-// Environment, the app's own choice, the shared configuration, then a development
-// checkout that is itself a library.
+// Environment, the app's own choice (like --library), then the order of the native
+// scripts: an engine folder that is itself a library (legacy layout), the shared configuration.
 function library() {
   return process.env.SKILLARIUM_LIBRARY || process.env.AGENT_SKILLS_LIBRARY || readSettings().library
-    || engineConfig().library || (isLibrary(engine) ? engine : '');
+    || (isLibrary(engine) ? engine : '') || engineConfig().library || '';
 }
 
 function text(value) {

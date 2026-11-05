@@ -6,5 +6,7 @@ set -euo pipefail
 engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=Never
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
-if (($# == 0)) || { (($# == 2)) && [[ "$1" == --repo ]]; }; then set -- "$@" maintain --apply-auto; fi
+if (($# == 0)) || { (($# == 2)) && [[ "$1" == --repo ]]; } || { (($# == 1)) && [[ "$1" == --repo=* ]]; }; then
+    set -- "$@" maintain --apply-auto
+fi
 exec python3 "$engine/server/manage.py" "$@"
