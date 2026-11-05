@@ -7,8 +7,14 @@ engine=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 for argument in "$@"; do
     if [[ "$argument" == --help || "$argument" == -h ]]; then exec python3 "$engine/server/setup.py" --help; fi
 done
-no_timers=false
-for argument in "$@"; do [[ "$argument" == --no-timers ]] && no_timers=true; done
+no_timers=false runner=false
+for argument in "$@"; do
+    case "$argument" in
+        --no-timers) no_timers=true ;;
+        --runner) runner=true ;;
+    esac
+done
+user=${USER:-$(id -un)}
 
 install_hint() {
     if command -v apt-get >/dev/null; then echo "sudo apt-get install -y $*"
@@ -21,6 +27,8 @@ missing=()
 for tool in git python3 jq curl flock; do
     command -v "$tool" >/dev/null || missing+=("$tool")
 done
+# A host runner executes actions/checkout, which needs Node.js on this machine.
+if $runner && ! command -v node >/dev/null; then missing+=(nodejs); fi
 if ((${#missing[@]})); then
     packages=${missing[*]}
     packages=${packages//flock/util-linux}
@@ -36,9 +44,9 @@ if ! $no_timers; then
         echo 'systemd --user is not available in this session; log in as this user (not su) or pass --no-timers.' >&2
         exit 1
     fi
-    if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != yes ]]; then
+    if [[ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)" != yes ]]; then
         echo 'Timers of this user must run without a login session. Enable it once:' >&2
-        echo "  sudo loginctl enable-linger $USER" >&2
+        echo "  sudo loginctl enable-linger $user" >&2
         exit 1
     fi
 fi

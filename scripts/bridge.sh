@@ -12,7 +12,7 @@ skillarium_bridge() {
     if [[ ! -f "$home/current/VERSION" ]]; then
         script=$(mktemp) || return 1
         if ! curl -fsSL --retry 2 -o "$script" "$releases/latest/download/skillarium.sh" ||
-            ! SKILLARIUM_HOME="$home" bash "$script" install >&2; then
+            ! SKILLARIUM_HOME="$home" SKILLARIUM_LIBRARY="$library" bash "$script" install >&2; then
             rm -f -- "$script"
             echo 'Skillarium bridge postponed: the engine could not be installed; the next sync retries.' >&2
             return 1

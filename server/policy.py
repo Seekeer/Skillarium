@@ -57,6 +57,8 @@ def unit_value(repo, revision, unit, cache):
         return cache[revision].get(unit)
     if kind == 'upstream':
         return tree_id(repo, revision, 'upstream/' + key)
+    if kind == 'workflow':
+        return tree_id(repo, revision, key)
     return tree_id(repo, revision, 'skills/' + key) is not None
 
 
@@ -198,6 +200,9 @@ def evaluate(repo, base, head):
             units.add(('upstream', parts[1]))
         elif parts[0] == 'upstream':
             errors.append(f'{path}: unexpected server state path')
+        elif parts[0] in ('.gitea', '.github'):
+            # The required check itself: a proposal replacing it could approve anything.
+            units.add(('workflow', path))
         elif parts[0] == 'skills' and len(parts) > 2:
             skill_names.add(parts[1])
         elif parts[0] == 'skills':
@@ -222,7 +227,7 @@ def evaluate(repo, base, head):
                                unit_value(repo, item['revision'], unit, cache) == final and
                                unit_value(repo, item['parent'], unit, cache) != final
                                for item in history)
-                label = unit[1] if unit[0] != 'upstream' else 'upstream/' + unit[1]
+                label = 'upstream/' + unit[1] if unit[0] == 'upstream' else unit[1]
                 if not endorsed:
                     errors.append(f'{label}: control change must come from the assigned server {author}')
             notes.append(f'Control changes checked against assigned server {server}')

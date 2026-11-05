@@ -19,7 +19,9 @@ import hosting
 import maintenance
 import skills
 
-ENGINE = Path(__file__).resolve().parents[1]
+# The path as invoked (…/current/…), not resolved: schedules written from here must keep
+# following current, or they would stay on one version and break when it is pruned.
+ENGINE = Path(os.path.abspath(__file__)).parents[1]
 CLIENT_FILES = absorb_updater.CLIENT_FILES
 MANIFEST = absorb_updater.MANIFEST
 SERVER_COMMANDS = ('maintain', 'register', 'set-policy', 'deploy-client')

@@ -56,7 +56,9 @@ fi
 [[ -n "$token" ]] || die 'no token given'
 
 gitea() { # gitea <resource>: JSON of an authenticated GET; fails on any error status
-    curl -fsS --retry 2 -H "Authorization: token $token" -H 'Accept: application/json' "$api$1"
+    # The header comes through stdin, so the token never appears in the process list.
+    printf 'header = "Authorization: token %s"\n' "$token" |
+        curl -fsS --retry 2 --config - -H 'Accept: application/json' "$api$1"
 }
 user=$(gitea /user) || die 'Gitea rejected the token'
 login=$(jq -r '.login' <<<"$user")

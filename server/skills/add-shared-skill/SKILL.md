@@ -1,12 +1,18 @@
 ---
 name: add-shared-skill
-description: Добавить общий скилл из Git/HTTPS или собственной локальной папки в единую библиотеку agent-skills и опубликовать его через PR.
+description: Добавить общий скилл из Git/HTTPS или собственной локальной папки в библиотеку скиллов Skillarium и опубликовать его через PR.
 ---
 
 # Добавить общий скилл
 
-Прочитай README и server/README.md в репозитории agent-skills. Библиотека —
-сам этот репозиторий; публикация всегда идёт через PR с автослиянием.
+Прочитай README и server/README.md Skillarium. Библиотека — отдельный
+репозиторий пользователя (клон обычно `~/Skillarium/library`); публикация
+всегда идёт через PR с автослиянием.
+
+Команды движка (`server/manage.py`, `install.*`) запускаются из
+установленного Skillarium: `~/.local/share/skillarium/current/...`
+(`%LOCALAPPDATA%\Skillarium\current\...`); библиотека берётся из конфига
+Skillarium или `--repo`/`--library`. Ниже пути даны относительно движка.
 
 ## Собственная папка без внешнего источника
 

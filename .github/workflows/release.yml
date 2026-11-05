@@ -49,6 +49,7 @@ jobs:
             app/dist-app/*.exe
             app/dist-app/*.AppImage
             app/dist-app/*.yml
+            !app/dist-app/builder-debug.yml
             app/dist-app/*.blockmap
 
   publish:

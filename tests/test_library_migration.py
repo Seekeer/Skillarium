@@ -46,6 +46,18 @@ class LibraryMigrationTests(unittest.TestCase):
     def test_unpinned_library_is_refused(self):
         self.assertIn('not pinned yet', self.migrate(expected=1))
 
+    def test_ssh_origin_needs_an_https_address_before_anything_changes(self):
+        self.pin()
+        self.lib.git(self.work, 'remote', 'set-url', 'origin', 'git@gitea.example.org:team/skills.git')
+        self.lib.git(self.work, 'config', 'remote.origin.pushurl', str(self.lib.remote))
+        self.lib.git(self.work, 'config', 'url.' + self.lib.remote.as_uri() + '.insteadOf', 'git@gitea.example.org:team/skills.git')
+        result = subprocess.run([sys.executable, str(ROOT / 'release' / 'migrate_library.py'), '--library', str(self.work)],
+                                env=self.lib.env, capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('pass the https address', result.stderr)
+        self.assertEqual(self.lib.git(self.work, 'status', '--porcelain'), '')
+        self.assertTrue((self.work / 'install.sh').exists())
+
     def test_engine_files_leave_and_the_data_stays(self):
         self.pin()
         before = set(self.lib.git(self.work, 'ls-tree', '-r', '--name-only', 'HEAD').splitlines())

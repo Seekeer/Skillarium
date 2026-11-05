@@ -34,6 +34,7 @@ if [[ "$mode" == --uninstall ]]; then
     exit 0
 fi
 resolve_library "$library_arg" || exit 2
+engine_real=$(cd -- "$engine" && pwd -P)
 
 lock_path=$(git -C "$repo" rev-parse --git-path agent-skills-sync.lock)
 [[ "$lock_path" = /* ]] || lock_path="$repo/$lock_path"
@@ -64,14 +65,14 @@ if [[ "$mode" != --install && "$mode" != --sync-only ]]; then exit 0; fi
 # Legacy layout (this engine inside the library): once Skillarium is installed, the timer
 # runs its current engine instead, and the engine files can leave the library.
 runner=$engine
-if [[ "$engine" == "$repo" && -z "${SKILLARIUM_NO_BRIDGE:-}" ]]; then
+if [[ "$engine_real" == "$repo" && -z "${SKILLARIUM_NO_BRIDGE:-}" ]]; then
     source "$engine/scripts/bridge.sh"
     if bridged=$(skillarium_bridge "$repo"); then runner=$bridged; fi
 fi
 # Quote systemd ExecStart syntax, including its percent and dollar expansion.
 # The engine runs the library given here; the legacy layout keeps its old line.
 exec_start="/usr/bin/bash $(unit_quote "$runner/install.sh")"
-if [[ "$runner" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi
+if [[ "$runner" != "$engine" || "$engine_real" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi
 exec_start+=' --sync-only'
 write_service() {
     cat >"$unit_dir/agent-skills.service" <<EOF

@@ -14,6 +14,7 @@ the policy engine (`manage.py pin-policy`).
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -62,6 +63,14 @@ def main():
                          '(skillarium server --repo ...) and let it run manage.py pin-policy first.')
     if git(repo, 'status', '--porcelain'):
         raise SystemExit(f'{repo} has local changes; use a clean clone')
+    url = args.url or git(repo, 'config', '--get', 'remote.origin.url')
+    try:
+        base, owner, name = setup.parse_repository(url)
+    except setup.SetupError:
+        raise SystemExit(f'origin is {url}; pass the https address of the library with --url')
+    server = config['server'].get('machine')
+    if not server:
+        raise SystemExit('No server is assigned in agent-skills.json')
     git(repo, 'checkout', '-q', '-B', args.branch, 'refs/remotes/origin/main')
     engine = engine_paths()
     tracked = [name for name in git(repo, 'ls-files', '-z').split('\0') if name]
@@ -78,15 +87,16 @@ def main():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(item.read_bytes())
-    url = args.url or git(repo, 'config', '--get', 'remote.origin.url')
-    base, owner, name = setup.parse_repository(url)
     readme = repo / 'README.md'
     readme.write_text(setup.readme_with_commands(readme.read_text(encoding='utf-8'), f'{base}/{owner}/{name}.git'),
                       encoding='utf-8', newline='\n')
     git(repo, 'add', '-A', '--', '.gitattributes', '.gitea', 'README.md')
-    git(repo, 'commit', '-q', '-m', 'Move the engine out of the library\n\n'
+    # The workflow change is server state: the commit carries the assigned server's service author.
+    environment = dict(os.environ, **hosting.author_env(server))
+    subprocess.run(['git', '-C', str(repo), 'commit', '-q', '-m', 'Move the engine out of the library\n\n'
         'The library keeps its skills, registry and configuration; machines run the engine installed '
-        'from Skillarium releases, and the PR check runs the pinned Skillarium policy.')
+        'from Skillarium releases, and the PR check runs the pinned Skillarium policy.\n\n'
+        f'Agent-Skills-Server: {server}\n'], env=environment, check=True)
     print(f'Branch {args.branch}: {len(removed)} engine files removed. Next:')
     print(f'  git -C "{repo}" push origin {args.branch}')
     print('  then open a pull request into main; the policy check accepts it like any project-file change.')

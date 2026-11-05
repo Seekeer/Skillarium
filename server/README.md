@@ -98,7 +98,13 @@ python3 server/manage.py import-local /path/to/my-skill [--dry-run|--no-publish]
 
 Проверка PR библиотеки (`templates/library/.gitea/workflows/policy.yml`)
 скачивает архив выпуска из `policy_engine` с GitHub, сверяет sha512 и
-запускает его `server/policy.py`; раннеру нужен доступ к GitHub.
+запускает его `server/policy.py`; раннеру нужен доступ к GitHub, а раннеру
+в режиме host (`--runner`) — ещё и Node.js для `actions/checkout`.
+
+Файлы `.gitea/` и `.github/` (workflow и сама обязательная проверка) —
+серверное состояние, как `sources.json`: их изменение принимается только из
+коммита служебного автора назначенного сервера. Иначе любой клиент мог бы
+заменить проверку на всегда успешную.
 
 На Gitea для `main`: запрет прямого push (`enable_push: false`), обязательная
 проверка `Library policy / policy (pull_request_target)`,

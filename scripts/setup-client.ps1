@@ -145,5 +145,9 @@ if (-not $NoApp -and -not $FromApp) { $app = Install-App }
 $mode = if ($NoSchedule) { 'Sync' } else { 'Install' }
 & (Join-Path $engine 'install.ps1') -Mode $mode -Library $Path
 if (-not $?) { throw 'Linking the skills failed; see the messages above.' }
+# Without the app nothing else updates the engine.
+if ($NoApp -and -not $FromApp -and -not $NoSchedule) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $engine 'scripts\skillarium.ps1') enable-updates
+}
 if ($app -and -not $NoLaunch -and (Test-Path -LiteralPath $app)) { Start-Process -FilePath $app }
 Write-Output "CONNECTED: $url in $Path"

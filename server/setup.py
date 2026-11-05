@@ -34,7 +34,9 @@ import urllib.request
 
 import hosting
 
-ENGINE = Path(__file__).resolve().parents[1]
+# The path as invoked (…/current/…), not resolved: schedules written from here must keep
+# following current, or they would stay on one version and break when it is pruned.
+ENGINE = Path(os.path.abspath(__file__)).parents[1]
 TEMPLATE = ENGINE / 'templates' / 'library'
 RELEASES = os.environ.get('SKILLARIUM_RELEASES', 'https://github.com/Seekeer/Skillarium/releases')
 CLIENTS_BEGIN = '<!-- skillarium:clients -->'
@@ -124,8 +126,9 @@ def read_token(path):
 def store_credential(base, login, token):
     """Git credential helper of this user; `store` is configured when there is none."""
     if not git('config', '--global', '--get', 'credential.helper', check=False):
+        # The only change to the user's global Git configuration, and only when no helper exists.
         git('config', '--global', 'credential.helper', 'store')
-        say('Git credential helper: store (~/.git-credentials, readable by this user only)')
+        say('Git credential helper was not set; now: store (~/.git-credentials, readable by this user only)')
     parts = urllib.parse.urlsplit(base)
     request = f'protocol={parts.scheme}\nhost={parts.netloc}\nusername={login}\npassword={token}\n\n'
     git('credential', 'approve', data=request.encode())
@@ -252,6 +255,12 @@ def config_home():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'skillarium'
 
 
+def unit_quote(value):
+    """A value for a systemd unit line: quoted, with \\, ", % and $ escaped."""
+    escaped = value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$')
+    return f'"{escaped}"'
+
+
 def write_private(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -307,6 +316,7 @@ def check_runner(gitea, owner, name, machine, register):
     folder = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share') / 'skillarium' / 'runner'
     folder.mkdir(parents=True, exist_ok=True)
     if not (folder / '.runner').is_file():
+        # The registration token is single-use and expires; act_runner takes it only as an argument.
         result = subprocess.run([runner, 'register', '--no-interactive', '--instance', gitea.api[:-len('/api/v1')],
                                  '--token', item['token'], '--name', f'{machine}-skillarium',
                                  '--labels', 'ubuntu-latest:host'], cwd=folder)
@@ -316,7 +326,8 @@ def check_runner(gitea, owner, name, machine, register):
     unit_dir.mkdir(parents=True, exist_ok=True)
     (unit_dir / 'skillarium-runner.service').write_text(
         '# Managed by Skillarium runner\n[Unit]\nDescription=Gitea Actions runner for the skill library\n'
-        f'[Service]\nWorkingDirectory={folder}\nExecStart={runner} daemon\nRestart=always\nRestartSec=30\n'
+        f'[Service]\nWorkingDirectory={unit_quote(str(folder))}\nExecStart={unit_quote(runner)} daemon\n'
+        'Restart=always\nRestartSec=30\n'
         '[Install]\nWantedBy=default.target\n', encoding='utf-8')
     subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', '--user', 'enable', '--now', 'skillarium-runner.service'], check=True)
@@ -336,8 +347,8 @@ def write_config(path):
 def install_timers(path, machine, with_client):
     bash = shutil.which('bash') or '/usr/bin/bash'
     steps = [[bash, str(ENGINE / 'server' / 'install.sh'), '--repo', str(path), '--install', machine]]
-    if ENGINE.parent.name == 'versions':
-        steps.append([bash, str(ENGINE.parent.parent / 'current' / 'scripts' / 'skillarium.sh'), 'enable-updates'])
+    if ENGINE.name == 'current' and (ENGINE.parent / 'versions').is_dir():
+        steps.append([bash, str(ENGINE / 'scripts' / 'skillarium.sh'), 'enable-updates'])
     else:
         say('Engine not installed from a release (development copy): no self-update timer')
     if with_client:

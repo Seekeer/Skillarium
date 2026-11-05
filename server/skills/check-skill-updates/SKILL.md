@@ -1,9 +1,14 @@
 ---
 name: check-skill-updates
-description: Проверить внешние источники единой библиотеки agent-skills, показать предложения обновлений и конфликты, принять или разрешить их через PR.
+description: Проверить внешние источники библиотеки скиллов Skillarium, показать предложения обновлений и конфликты, принять или разрешить их через PR.
 ---
 
 # Проверить обновления скиллов
+
+Команды движка (`server/manage.py`, `install.*`) запускаются из
+установленного Skillarium: `~/.local/share/skillarium/current/...`
+(`%LOCALAPPDATA%\Skillarium\current\...`); библиотека берётся из конфига
+Skillarium или `--repo`/`--library`. Ниже пути даны относительно движка.
 
 Прочитай server/README.md. Проверка без публикации работает на любой машине:
 `python3 server/manage.py check`; отчёт — `.git/skill-updates.json`.

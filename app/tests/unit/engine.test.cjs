@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { deployBundledEngine, engineHome } = require('../../main/engine.cjs');
+const { deployBundledEngine, engineHome, compareVersions } = require('../../main/engine.cjs');
 
 function bundle(root, version) {
   const folder = path.join(root, `bundle-${version}`);
@@ -31,9 +31,11 @@ test('the bundled engine becomes current and follows app updates', () => {
     assert.deepStrictEqual(fs.readdirSync(path.join(env.SKILLARIUM_HOME, 'versions')).sort(), ['0.1.0', '0.2.0']);
     assert.deepStrictEqual(fs.readFileSync(path.join(env.SKILLARIUM_HOME, 'history'), 'utf8').trim().split('\n'),
       ['0.1.0', '0.2.0']);
-    // Switching back to an older app keeps the newer version folder for later.
+    // An older app (or a newer engine from a beta self-update) never downgrades current.
     deployBundledEngine(bundle(root, '0.1.0'), { env });
-    assert.strictEqual(fs.readFileSync(path.join(current, 'VERSION'), 'utf8').trim(), '0.1.0');
+    assert.strictEqual(fs.readFileSync(path.join(current, 'VERSION'), 'utf8').trim(), '0.2.0');
+    for (const version of ['0.3.0', '0.4.0', '0.5.0']) deployBundledEngine(bundle(root, version), { env });
+    assert.deepStrictEqual(fs.readdirSync(path.join(env.SKILLARIUM_HOME, 'versions')).sort(), ['0.3.0', '0.4.0', '0.5.0']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -48,6 +50,11 @@ test('a bundle without a valid VERSION is not deployed', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('versions follow semantic precedence', () => {
+  const order = ['0.9.0', '1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0', '1.0.1', '1.10.0'];
+  assert.deepStrictEqual([...order].reverse().sort(compareVersions), order);
 });
 
 test('engine home follows the native scripts', () => {

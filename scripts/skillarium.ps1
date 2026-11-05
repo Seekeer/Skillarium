@@ -23,6 +23,8 @@ Usage: skillarium <command>
   rollback                       return to the previous version and skip the current one
   install [-Version V] [-Channel C]
                                  install a release (first installation or a fixed version)
+  enable-updates | disable-updates
+                                 hourly self-update task (machines without the app)
   client ...                     connect this machine to a library (skillarium client -Help)
 '@
 }
@@ -235,12 +237,45 @@ function Install-Command {
     [IO.File]::WriteAllText((Join-Path $bin 'skillarium.cmd'), $text, [Text.Encoding]::ASCII)
     # A custom SKILLARIUM_HOME (tests, portable setups) leaves the user PATH alone.
     if ($env:SKILLARIUM_HOME) { return }
-    $path = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @(if ($path) { $path.Split(';') | Where-Object { $_ } })
-    if ($parts -notcontains $bin) {
-        [Environment]::SetEnvironmentVariable('Path', (@($parts) + $bin) -join ';', 'User')
-        Write-Output "Added $bin to the user PATH; new terminals find skillarium."
+    # The raw registry value keeps %VARIABLE% references; the .NET API would expand them.
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    try {
+        $path = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $parts = @(if ($path) { $path.Split(';') | Where-Object { $_ } })
+        if ($parts -contains $bin) { return }
+        $key.SetValue('Path', ((@($parts) + $bin) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally { $key.Close() }
+    # Tell Explorer, so terminals it starts see the new PATH.
+    if (-not ('Skillarium.Environment' -as [type])) {
+        Add-Type -Namespace Skillarium -Name Environment -MemberDefinition @'
+[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
+'@
     }
+    $result = [UIntPtr]::Zero
+    [Skillarium.Environment]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result) | Out-Null
+    Write-Output "Added $bin to the user PATH; new terminals find skillarium."
+}
+
+$updateTask = 'Skillarium-Update-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+# Hourly self-update for machines without the app (the app updates itself and its engine).
+function Enable-Updates {
+    $script = Join-Path $root 'current\scripts\skillarium.ps1'
+    $arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" self-update"
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(30) -RepetitionInterval (New-TimeSpan -Hours 1)
+    $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+    Register-ScheduledTask -TaskName $updateTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Update the Skillarium engine hourly.' -Force | Out-Null
+    Write-Output "Hourly Skillarium self-update enabled: $updateTask"
+}
+
+function Disable-Updates {
+    if (Get-ScheduledTask -TaskName $updateTask -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $updateTask -Confirm:$false
+    }
+    Write-Output 'Skillarium self-update disabled.'
 }
 
 function Read-Options {
@@ -262,7 +297,7 @@ function Invoke-Install {
     if ($channel -notin @('stable', 'beta')) { throw "Unknown channel: $channel" }
     Enter-UpdateLock
     $feed = Read-Feed -Channel $channel -Version $options.Version
-    if (-not (Test-Compatible $feed)) { exit 1 }
+    if (-not (Test-Compatible $feed)) { throw "Skillarium $($feed.Version) cannot read this library; nothing installed." }
     Get-Release $feed
     Set-Current $feed.Version
     Write-Text (Join-Path $root 'channel') $channel
@@ -299,7 +334,10 @@ function Invoke-Rollback {
     Enter-UpdateLock
     $current = Get-CurrentVersion
     if (-not $current) { throw 'Skillarium is not installed.' }
-    $previous = Get-History | Where-Object { $_ -ne $current -and (Test-Path -LiteralPath (Join-Path $root "versions\$_\VERSION")) } |
+    $skipFile = Join-Path $root 'skip'
+    $skipped = if (Test-Path -LiteralPath $skipFile) { (Get-Content -LiteralPath $skipFile -Raw).Trim() } else { '' }
+    # A version rolled back before is not a target either.
+    $previous = Get-History | Where-Object { $_ -ne $current -and $_ -ne $skipped -and (Test-Path -LiteralPath (Join-Path $root "versions\$_\VERSION")) } |
         Select-Object -First 1
     if (-not $previous) { throw 'No previous version to roll back to.' }
     Write-Text (Join-Path $root 'skip') $current
@@ -331,26 +369,32 @@ function Show-SkillariumStatus {
 
 $command = if ($args.Count) { [string]$args[0] } else { 'help' }
 $rest = @(if ($args.Count -gt 1) { $args[1..($args.Count - 1)] })
+$code = 0
 try {
     switch ($command) {
         'status' { Show-SkillariumStatus }
         'self-update' { Invoke-SelfUpdate $rest }
         'rollback' { Invoke-Rollback }
         'install' { Invoke-Install $rest }
+        'enable-updates' { Enable-Updates }
+        'disable-updates' { Disable-Updates }
         'client' {
             if (-not (Get-CurrentVersion)) { Invoke-Install @() }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
-            exit $LASTEXITCODE
         }
         { $_ -in @('help', '--help', '-h', '-Help') } { Show-Usage }
-        default { Show-Usage; exit 2 }
+        default { Show-Usage; $code = 2 }
     }
 } catch {
     # One plain line, not a wrapped error record.
     [Console]::Error.WriteLine("skillarium: $($_.Exception.Message)")
     if ($env:SKILLARIUM_DEBUG) { [Console]::Error.WriteLine($_.ScriptStackTrace) }
-    exit 1
+    $code = 1
 } finally {
     if ($script:lockStream) { $script:lockStream.Dispose() }
 }
+# Run from a file: an exit code. Run from memory (irm | scriptblock): exit would close the
+# user's PowerShell window, so the code is left in $LASTEXITCODE instead.
+if ($PSCommandPath) { exit $code }
+$global:LASTEXITCODE = $code

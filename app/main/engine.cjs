@@ -26,6 +26,47 @@ function recordHistory(home, version) {
   fs.renameSync(`${file}.new`, file);
 }
 
+const KEEP = 2;
+const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+
+// Semantic version precedence: negative, zero or positive like a comparator.
+function compareVersions(a, b) {
+  const x = VERSION.exec(a);
+  const y = VERSION.exec(b);
+  for (let i = 1; i <= 3; i += 1) {
+    const difference = Number(x[i]) - Number(y[i]);
+    if (difference) return difference;
+  }
+  if (x[4] === y[4]) return 0;
+  if (x[4] === undefined) return 1;
+  if (y[4] === undefined) return -1;
+  const left = x[4].split('.');
+  const right = y[4].split('.');
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    if (i >= left.length) return -1;
+    if (i >= right.length) return 1;
+    if (left[i] === right[i]) continue;
+    const ln = /^\d+$/.test(left[i]);
+    const rn = /^\d+$/.test(right[i]);
+    if (ln && rn) return Number(left[i]) - Number(right[i]);
+    if (ln) return -1;
+    if (rn) return 1;
+    return left[i] < right[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+// Keeps the current version and the two most recently active others, like `skillarium`.
+function prune(home, current) {
+  let history = [];
+  try { history = fs.readFileSync(path.join(home, 'history'), 'utf8').split(/\r?\n/).filter(Boolean); } catch { /* none */ }
+  const kept = history.reverse().filter((version) => version !== current).slice(0, KEEP);
+  for (const name of fs.readdirSync(path.join(home, 'versions'))) {
+    if (name.startsWith('.') || name === current || kept.includes(name)) continue;
+    fs.rmSync(path.join(home, 'versions', name), { recursive: true, force: true });
+  }
+}
+
 // Removes a symlink or junction itself, never the folder it points to.
 function removeLink(link) {
   try { fs.unlinkSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -46,11 +87,12 @@ function switchCurrent(home, version, platform) {
   recordHistory(home, version);
 }
 
-// Copies the bundled engine into versions/<version> (once) and points current at it.
+// Copies the bundled engine into versions/<version> (once) and points current at it, unless
+// current is already newer (a beta self-update): the app never downgrades the engine.
 // Returns the engine folder to run, or null when the app carries no engine.
 function deployBundledEngine(bundled, { env = process.env, platform = process.platform } = {}) {
   const version = versionOf(bundled);
-  if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) return null;
+  if (!version || !VERSION.test(version)) return null;
   const home = engineHome(env, platform);
   const target = path.join(home, 'versions', version);
   fs.mkdirSync(path.join(home, 'versions'), { recursive: true });
@@ -64,7 +106,11 @@ function deployBundledEngine(bundled, { env = process.env, platform = process.pl
       fs.rmSync(incoming, { recursive: true, force: true });
     }
   }
-  if (versionOf(path.join(home, 'current')) !== version) switchCurrent(home, version, platform);
+  const installed = versionOf(path.join(home, 'current'));
+  if (!installed || !VERSION.test(installed) || compareVersions(version, installed) > 0) {
+    switchCurrent(home, version, platform);
+    prune(home, version);
+  }
   return path.join(home, 'current');
 }
 
@@ -75,4 +121,4 @@ function channel(env = process.env) {
   } catch { return 'stable'; }
 }
 
-module.exports = { engineHome, deployBundledEngine, channel };
+module.exports = { engineHome, deployBundledEngine, channel, compareVersions };

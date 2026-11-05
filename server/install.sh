@@ -67,7 +67,7 @@ if [[ -f "$unit_dir/agent-skills-updater.timer" ]]; then
 fi
 # The engine runs the library given here; the legacy layout keeps its old line.
 exec_start="/usr/bin/bash $(unit_quote "$engine/server/run.sh")"
-if [[ "$engine" != "$library" ]]; then exec_start+=" --repo $(unit_quote "$library")"; fi
+if [[ "$(cd -- "$engine" && pwd -P)" != "$library" ]]; then exec_start+=" --repo $(unit_quote "$library")"; fi
 mkdir -p -- "$unit_dir"
 cat >"$unit_dir/agent-skills-server.service" <<EOF
 $marker

@@ -97,6 +97,18 @@ class PolicyTests(unittest.TestCase):
         self.commit_as('i3', 'Pin and reassign')
         self.assertTrue(any('assign-server' in e for e in self.evaluate()))
 
+    def test_workflows_change_only_by_the_assigned_server(self):
+        workflow = self.work / '.gitea' / 'workflows' / 'policy.yml'
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text('name: Always green\n')
+        self.commit_as('laptop', 'Replace the required check')
+        self.assertTrue(any('.gitea/workflows/policy.yml' in e and 'assigned server' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text('name: Library policy\n')
+        self.commit_as('i3', 'Server updates the check')
+        self.assertEqual(self.evaluate(), [])
+
     def test_version_precedence(self):
         order = ['0.9.0', '1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta.2', '1.0.0-beta.11',
                  '1.0.0-rc.1', '1.0.0', '1.0.1', '1.10.0']

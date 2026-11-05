@@ -46,6 +46,8 @@ curl -fsSL https://github.com/Seekeer/Skillarium/releases/latest/download/skilla
 
 Установщик узнаёт библиотеку и сервер (роль не меняется), переписывает таймер
 `agent-skills-server` на `current/server/run.sh` и включает самообновление.
+Проверка: `systemctl --user cat agent-skills-server.service` показывает путь
+через `current`, а не `versions/<версия>`.
 При первом обслуживании сервер закрепляет выпуск политики (`pin-policy`) своим
 PR; его проверяет ещё старая политика из библиотеки, в мостовом выпуске она уже
 знает это правило. Можно не ждать суток:
@@ -74,7 +76,9 @@ git -C ~/agent-skills push origin skillarium/remove-engine
 ```
 
 Скрипт (из репозитория Skillarium) отказывается, пока `policy_engine` не
-закреплён. Он удаляет все пути движка, оставляет `skills/`, `sources.json`,
+закреплён, а при SSH-адресе `origin` просит `--url https://...`. Коммит
+меняет workflow, поэтому подписан служебным автором назначенного сервера
+(`agent-skills/<server.machine>`) — так его примет проверка. Он удаляет все пути движка, оставляет `skills/`, `sources.json`,
 `agent-skills.json`, `upstream/` и прочие ваши папки, ставит проверку PR из
 шаблона и дописывает в README команды подключения машин. Откройте PR в `main`:
 проверка принимает его как изменение файлов проекта.

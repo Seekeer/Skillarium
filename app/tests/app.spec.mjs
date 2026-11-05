@@ -300,6 +300,18 @@ test('explains unapplied connections and unavailable projects', async () => {
   await expect(page.getByRole('switch', { name: `Глобальный доступ: ${SHARED}` })).toHaveAttribute('aria-checked', 'false');
 });
 
+test('a library of a newer format is shown as read-only with an update check', async () => {
+  const config = path.join(fixture.library, 'agent-skills.json');
+  const data = JSON.parse(fs.readFileSync(config, 'utf8'));
+  fs.writeFileSync(config, `${JSON.stringify({ ...data, format: 2 }, null, 2)}\n`);
+  session = await launch(fixture);
+  const { page } = session;
+  const banner = page.getByTestId('read-only');
+  await expect(banner).toContainText('формата 2');
+  // A development run has no updater: the button is not offered.
+  await expect(banner.getByRole('button', { name: 'Проверить обновление' })).toHaveCount(0);
+});
+
 test('first run offers to connect a library and reports a failed connection', async () => {
   const env = { ...fixture.env };
   delete env.AGENT_SKILLS_LIBRARY;

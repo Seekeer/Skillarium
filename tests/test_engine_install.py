@@ -134,14 +134,18 @@ class PowerShellEngineInstallTests(EngineInstall, unittest.TestCase):
 
     def test_bootstrap_scriptblock_passes_role_arguments(self):
         self.releases.publish('0.1.0')
-        # The published bootstrap runs from memory, as irm | scriptblock does.
-        script = (f"& ([scriptblock]::Create([IO.File]::ReadAllText('{ROOT / 'scripts' / 'skillarium.ps1'}'))) install")
+        # The published bootstrap runs from memory, as irm | scriptblock does; neither success nor
+        # failure may close the user's PowerShell window.
+        block = f"([scriptblock]::Create([IO.File]::ReadAllText('{ROOT / 'scripts' / 'skillarium.ps1'}')))"
+        script = (f"& {block} install; \"after install $LASTEXITCODE\"; "
+                  f"& {block} rollback; \"after failure $LASTEXITCODE\"")
         environment = dict(os.environ, SKILLARIUM_HOME=str(self.home), APPDATA=str(self.root / 'appdata'),
                            **self.releases.env())
         result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                                  '-Command', script], env=environment, capture_output=True, text=True,
                                 encoding='utf-8', errors='replace')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('after install 0', result.stdout, result.stdout + result.stderr)
+        self.assertIn('after failure 1', result.stdout, result.stdout + result.stderr)
         self.assertEqual(self.version(), '0.1.0')
 
 

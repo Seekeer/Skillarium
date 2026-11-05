@@ -156,7 +156,8 @@ library_format() {
 lock() {
     mkdir -p -- "$home/versions"
     exec 8>"$home/.lock"
-    if have flock && ! flock -n 8; then die 'another Skillarium update is running'; fi
+    have flock || die 'flock (util-linux) is required'
+    flock -n 8 || die 'another Skillarium update is running'
 }
 
 # Reads the feed of a channel or of one version; sets f_version f_min f_max f_url f_sha f_size.
@@ -324,12 +325,15 @@ cmd_self_update() {
 }
 
 cmd_rollback() {
-    local current previous='' version
+    local current previous='' version skipped
     lock
     current=$(current_version) || die 'Skillarium is not installed'
+    skipped=$(cat -- "$home/skip" 2>/dev/null || true)
     if [[ -f "$home/history" ]]; then
         while IFS= read -r version; do
-            if [[ -n "$version" && "$version" != "$current" && -f "$home/versions/$version/VERSION" ]]; then
+            # A version rolled back before is not a target either.
+            if [[ -n "$version" && "$version" != "$current" && "$version" != "$skipped" &&
+                  -f "$home/versions/$version/VERSION" ]]; then
                 previous=$version; break
             fi
         done < <(tac -- "$home/history")
@@ -358,17 +362,23 @@ cmd_status() {
 }
 
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+# A value for a systemd unit line: quoted, with \, ", % and $ escaped (as in scripts/locate.sh,
+# which this file cannot source: it also runs before any engine is installed).
+unit_quote() {
+    local value=$1
+    value=${value//\\/\\\\}; value=${value//\"/\\\"}
+    value=${value//%/%%}; value=${value//\$/\$\$}
+    printf '"%s"' "$value"
+}
 update_marker='# Managed by Skillarium self-update'
 
 cmd_enable_updates() {
-    local unit quoted
+    local unit
     for unit in skillarium-update.service skillarium-update.timer; do
         if [[ -e "$unit_dir/$unit" ]] && [[ $(head -n 1 "$unit_dir/$unit") != "$update_marker" ]]; then
             die "existing unmanaged unit preserved: $unit_dir/$unit"
         fi
     done
-    quoted=$home/current/scripts/skillarium.sh
-    quoted=${quoted//\\/\\\\}; quoted=${quoted//\"/\\\"}; quoted=${quoted//%/%%}; quoted=${quoted//\$/\$\$}
     mkdir -p -- "$unit_dir"
     cat >"$unit_dir/skillarium-update.service" <<EOF
 $update_marker
@@ -376,8 +386,8 @@ $update_marker
 Description=Update the Skillarium engine
 [Service]
 Type=oneshot
-Environment="SKILLARIUM_HOME=${home//%/%%}"
-ExecStart=/usr/bin/bash "$quoted" self-update
+Environment=$(unit_quote "SKILLARIUM_HOME=$home")
+ExecStart=/usr/bin/bash $(unit_quote "$home/current/scripts/skillarium.sh") self-update
 TimeoutStartSec=10min
 EOF
     cat >"$unit_dir/skillarium-update.timer" <<EOF

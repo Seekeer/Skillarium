@@ -16,7 +16,10 @@ function Install-SkillariumBridge {
             $script = Join-Path ([IO.Path]::GetTempPath()) ('skillarium-' + [Guid]::NewGuid().ToString('N') + '.ps1')
             try {
                 Invoke-WebRequest -UseBasicParsing -Uri "$releases/latest/download/skillarium.ps1" -OutFile $script
-                $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script install 2>&1
+                $savedLibrary = $env:SKILLARIUM_LIBRARY
+                $env:SKILLARIUM_LIBRARY = $Library
+                try { $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script install 2>&1 }
+                finally { $env:SKILLARIUM_LIBRARY = $savedLibrary }
                 if ($LASTEXITCODE -ne 0) { throw (($output | Out-String).Trim()) }
                 $output | ForEach-Object { Write-Host $_ }
             } finally { Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue }
