@@ -123,7 +123,9 @@ class FakeGitea:
                         return self.reply(404, dict(message='repository not found'))
                     rest = parts[3:]
                     if not rest and method == 'GET':
-                        return self.reply(200, dict(full_name=f'{parts[1]}/{parts[2]}', **repo['settings']))
+                        push = login == parts[1] or user['admin'] or repo['collaborators'].get(login) in ('write', 'admin')
+                        return self.reply(200, dict(full_name=f'{parts[1]}/{parts[2]}', **repo['settings'],
+                                                    permissions=dict(pull=True, push=push, admin=login == parts[1])))
                     if not rest and method == 'PATCH':
                         repo['settings'].update(body)
                         return self.reply(200, dict(full_name=f'{parts[1]}/{parts[2]}', **repo['settings']))

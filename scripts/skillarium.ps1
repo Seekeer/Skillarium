@@ -126,7 +126,9 @@ function Read-Feed {
     } else {
         $url = "$releases/latest/download/latest.json"
     }
-    $document = [string](Invoke-WebRequest -UseBasicParsing -Uri $url).Content
+    # Release assets come as application/octet-stream: Content is then a byte array.
+    $content = (Invoke-WebRequest -UseBasicParsing -Uri $url).Content
+    $document = if ($content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($content) } else { [string]$content }
     $feed = $document | ConvertFrom-Json
     $entry = $feed.engine.windows
     if ([string]$feed.version -notmatch $versionPattern -or -not $entry -or
@@ -345,7 +347,9 @@ try {
         default { Show-Usage; exit 2 }
     }
 } catch {
-    Write-Error -ErrorAction Continue "skillarium: $($_.Exception.Message)"; if ($env:SKILLARIUM_DEBUG) { Write-Host $_.ScriptStackTrace }
+    # One plain line, not a wrapped error record.
+    [Console]::Error.WriteLine("skillarium: $($_.Exception.Message)")
+    if ($env:SKILLARIUM_DEBUG) { [Console]::Error.WriteLine($_.ScriptStackTrace) }
     exit 1
 } finally {
     if ($script:lockStream) { $script:lockStream.Dispose() }

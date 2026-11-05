@@ -66,9 +66,19 @@ class FakeReleases:
     def env(self):
         return {'SKILLARIUM_RELEASES': self.releases_url, 'SKILLARIUM_API': self.api_url}
 
-    def publish(self, version, prerelease=False, corrupt=False):
+    def publish(self, version, prerelease=False, corrupt=False, app=False, corrupt_app=False):
         out = self.folder / ('v' + version)
-        feed = build_engine.build(version, out, self.releases_url + '/download', files=self.files)
+        apps = []
+        if app or corrupt_app:
+            # Stand-ins for the installers; the tests check download and verification.
+            out.mkdir(parents=True, exist_ok=True)
+            for name in (f'Skillarium-Setup-{version}.exe', f'Skillarium-{version}.AppImage'):
+                (out / name).write_bytes(b'installer of ' + version.encode())
+                apps.append(out / name)
+        feed = build_engine.build(version, out, self.releases_url + '/download', apps=apps, files=self.files)
+        if corrupt_app:
+            for path in apps:
+                path.write_bytes(b'tampered installer')
         if corrupt:
             for item in feed['engine'].values():
                 path = out / item['file']
