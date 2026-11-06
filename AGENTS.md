@@ -21,11 +21,11 @@
 пользователя: служебная идентичность задаётся на одну команду.
 
 Для добавления источника прочитай
-[add-shared-skill](server/skills/add-shared-skill/SKILL.md).
+[add-shared-skill](.codex/skills/add-shared-skill/SKILL.md).
 Для обновлений и конфликтов —
-[check-skill-updates](server/skills/check-skill-updates/SKILL.md).
+[check-skill-updates](.codex/skills/check-skill-updates/SKILL.md).
 Для сервера, назначения роли, хостинга и миграции —
-[maintain-skill-catalogs](server/skills/maintain-skill-catalogs/SKILL.md).
+[maintain-skill-catalogs](.codex/skills/maintain-skill-catalogs/SKILL.md).
 Команды и границы автоматизации: [README.md](README.md),
 [server/README.md](server/README.md).
 
