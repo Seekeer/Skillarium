@@ -13,6 +13,10 @@ function useEngine(folder) {
   engine = folder;
 }
 
+function enginePath() {
+  return engine;
+}
+
 function isLibrary(folder) {
   return Boolean(folder) && fs.existsSync(path.join(folder, 'sources.json'))
     && fs.existsSync(path.join(folder, 'agent-skills.json'));
@@ -64,4 +68,4 @@ function execute([file, argv], cwd) {
   });
 }
 
-module.exports = { repositoryRoot, useEngine, isLibrary, runProjects, connect };
+module.exports = { repositoryRoot, useEngine, enginePath, isLibrary, runProjects, connect };

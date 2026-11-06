@@ -64,6 +64,24 @@ bare remote. Управляемые сбои: потерянный ответ н
 (`tests/unit`, `node --test`) и Playwright-тесты интерфейса, в том числе
 экрана первого запуска.
 
+Собранное приложение (Windows) — как его получают пользователи, с настоящим
+обновлением из GitHub Releases, но в одноразовом профиле: свой
+`%LOCALAPPDATA%`/`%APPDATA%`/`SKILLARIUM_HOME`, своя пустая библиотека, свои имена
+задач. Установленное приложение, библиотека, задачи и ссылки пользователя не
+затрагиваются.
+
+```powershell
+powershell -File app\scripts\verify-packaged.ps1 -Version 0.1.1 -DebugPort 9333   # сборка и запуск
+node app\scripts\drive-settings.mjs 9333 app\test-results\settings-verification   # настройки и скриншоты
+powershell -File app\scripts\verify-packaged.ps1 -Stop                             # остановка
+```
+
+С версией старше последнего выпуска приложение само находит его, скачивает и
+предлагает перезапуск — не нажимайте его: запустится настоящий установщик.
+Без `-Version` берётся версия `package.json`, и ручная проверка в настройках
+отвечает «Установлена последняя версия». `-NoBuild` перезапускает прежнюю
+сборку; окно управляется через отладочный порт на 127.0.0.1.
+
 ## Нативный Windows runner
 
 CI движка — GitHub Actions (`.github/workflows/tests.yml`, `windows-latest`):
@@ -98,9 +116,11 @@ Scheduler; Windows-результат нужен отдельно. Правил�
 
 ## Local verification and issue tracker
 
-This repository contains native CLI clients and a server-side CLI, not a
-long-running application. The verification entry point is the unittest command
-above, with the native Windows scripts for junctions and Task Scheduler; no
+This repository contains native CLI clients, a server-side CLI and a desktop
+app, not a server application. The verification entry point is the unittest command
+above, with the native Windows scripts for junctions and Task Scheduler; the
+desktop app is verified with `npm test` and, as released, with
+`app/scripts/verify-packaged.ps1` in a throwaway profile (see above). No
 application URL, test identity, or database is required. Linux verification can
 also run in an isolated container with Git, Python, Bash, jq, curl and flock,
 using a temporary copy of the repository rather than the installed client.

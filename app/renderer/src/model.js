@@ -36,6 +36,26 @@ export function cellOf(project, name) {
   return project.skills.find((entry) => entry.name === name) || null;
 }
 
+// One line about app updates for the settings window (main/updates.cjs states).
+export function updateSummary(update) {
+  switch (update?.state) {
+    case 'development': return 'Это сборка для разработки: она не обновляется. Обновления получает установленное приложение.';
+    case 'disabled': return 'Автообновление выключено переменной SKILLARIUM_NO_UPDATES.';
+    case 'checking': return 'Проверяю обновления…';
+    case 'downloading': return `Загружаю версию ${update.version}${Number.isFinite(update.percent) ? ` — ${update.percent}%` : ''}…`;
+    case 'ready': return `Версия ${update.version} загружена и установится при перезапуске.`;
+    case 'current': return 'Установлена последняя версия.';
+    case 'error': return `Проверить обновления не удалось: ${update.message}`;
+    default: return 'Обновления ещё не проверялись.';
+  }
+}
+
+export function checkedText(checkedAt) {
+  if (!checkedAt) return '';
+  const when = new Date(checkedAt);
+  return Number.isNaN(when.getTime()) ? '' : `Последняя проверка: ${when.toLocaleString('ru-RU')}`;
+}
+
 export function globalCaption(global) {
   if (global.manual) return global.enabled ? 'Включено вручную' : 'Выключено вручную';
   if (global.pending) return 'Выключится после подключения';

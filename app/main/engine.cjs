@@ -121,4 +121,4 @@ function channel(env = process.env) {
   } catch { return 'stable'; }
 }
 
-module.exports = { engineHome, deployBundledEngine, channel, compareVersions };
+module.exports = { engineHome, deployBundledEngine, channel, compareVersions, versionOf };

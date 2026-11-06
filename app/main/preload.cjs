@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('skills', {
   defaultFolder: () => ipcRenderer.invoke('default-folder'),
   chooseFolder: () => ipcRenderer.invoke('choose-folder'),
   connect: (request) => ipcRenderer.invoke('connect', request),
+  about: () => ipcRenderer.invoke('about'),
   updateState: () => ipcRenderer.invoke('update-state'),
   checkUpdate: () => ipcRenderer.invoke('check-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),

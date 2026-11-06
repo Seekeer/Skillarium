@@ -3,8 +3,8 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { repositoryRoot, useEngine, isLibrary, runProjects, connect } = require('./backend.cjs');
-const { deployBundledEngine, channel } = require('./engine.cjs');
+const { repositoryRoot, useEngine, enginePath, isLibrary, runProjects, connect } = require('./backend.cjs');
+const { deployBundledEngine, channel, versionOf } = require('./engine.cjs');
 const { startUpdates, updateState, checkNow, installNow } = require('./updates.cjs');
 
 const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -89,6 +89,13 @@ ipcMain.handle('connect', async (_event, request) => {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
+// Versions for the settings window; a development checkout runs the repository's engine.
+ipcMain.handle('about', () => ({
+  app: app.getVersion(),
+  packaged: app.isPackaged,
+  engine: { path: enginePath(), version: versionOf(enginePath()) },
+  channel: channel(),
+}));
 ipcMain.handle('update-state', () => updateState());
 ipcMain.handle('check-update', () => checkNow());
 ipcMain.handle('install-update', () => installNow());

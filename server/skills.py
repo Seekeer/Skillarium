@@ -259,7 +259,9 @@ def extract_git(source, revision, destination):
     mirror = git_mirror(source, revision)
     relative = str(PurePosixPath(source.get('path', '.')))
     tree = revision if relative == '.' else revision + ':' + relative
-    archive = git('archive', '--format=tar', tree, cwd=mirror)
+    # git archive converts line endings like a checkout would; Git for Windows defaults to
+    # core.autocrlf=true, which would make content hashes differ between Windows and Linux.
+    archive = git('-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'archive', '--format=tar', tree, cwd=mirror)
     total = 0
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
         members = bundle.getmembers()
