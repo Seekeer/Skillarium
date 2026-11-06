@@ -15,10 +15,51 @@ load_bindings() {
     state=$(jq -c 'select(.version == 1 and (.library | type) == "string" and
         ([.projects, .global, .links, .excludes] | all(type == "object")))' "$bindings_file" 2>/dev/null)
     [[ -n "$state" ]] || { echo "Invalid local bindings state preserved: $bindings_file" >&2; return 1; }
-    if [[ $(jq -r .library <<<"$state") != "$repo" ]]; then
-        echo "Local bindings belong to another library: $(jq -r .library <<<"$state")" >&2; return 1
+    local owner
+    owner=$(jq -r .library <<<"$state")
+    if [[ $owner != "$repo" ]]; then
+        if is_library "$owner"; then
+            echo "Local bindings belong to another library: $owner. Connect that library, or move $bindings_file aside to start over with this one." >&2
+            return 1
+        fi
+        if ! is_disposable_library "$owner"; then
+            # A disconnected drive or a moved clone looks the same as a deleted one; never guess.
+            echo "Local bindings belong to library $owner, which is not available now. Reconnect it, or move $bindings_file aside to start over with this one." >&2
+            return 1
+        fi
+        clear_disposable_bindings "$owner"
+        return
     fi
     saved_state=$state
+}
+
+# A library in the temporary folder that no longer exists: what a test run leaves behind.
+is_disposable_library() {
+    local temporary=${TMPDIR:-/tmp}
+    temporary=${temporary%/}
+    [[ -n "$1" && ! -e "$1" && ( "$1" == "$temporary"/* || "$1" == /tmp/* ) ]]
+}
+
+# Removes the links and exclude lines the vanished library still owned, keeps its
+# state file aside for reference and starts this library with fresh state.
+clear_disposable_bindings() {
+    local owner=$1 aside link failed=0
+    aside="$bindings_file.orphaned-$(date +%Y%m%d%H%M%S)"
+    cp -- "$bindings_file" "$aside" || return 1
+    while IFS= read -r link; do
+        [[ -z "$link" ]] || remove_owned_link "$link" || failed=1
+    done < <(jq -r '.links | keys[]' <<<"$state")
+    prune_excludes || failed=1
+    if ((failed)); then
+        # The state file stays untouched, so the next run retries what is still owned.
+        echo "Cleanup of the removed temporary library $owner is incomplete; its records stay in $bindings_file for the next run." >&2
+        return 1
+    fi
+    rm -- "$bindings_file" || return 1
+    echo "NOTE: local bindings of the removed temporary library $owner cleared; the old state is kept in $aside" >&2
+    state=$(jq -cn --arg library "$repo" \
+        '{version: 1, library: $library, projects: {}, global: {}, links: {}, excludes: {}}') || return 1
+    saved_state=''
 }
 
 save_bindings() {

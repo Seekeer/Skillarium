@@ -14,12 +14,13 @@ function Invoke-Installer($Mode) {
     Assert-True ($LASTEXITCODE -eq 0) "Installer failed in $Mode mode."
 }
 $savedEnvironment = @{}
-foreach ($key in @('HOME', 'USERPROFILE', 'LOCALAPPDATA')) {
+foreach ($key in @('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA')) {
     $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 try {
     $env:HOME = $env:USERPROFILE = Join-Path $fixture 'isolated profile'
     $env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'AppData/Local'
+    $env:APPDATA = Join-Path $env:USERPROFILE 'AppData/Roaming'
     New-Item -ItemType Directory -Path (Join-Path $fixture 'scripts') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'scripts\sync-hidden.vbs') -Destination (Join-Path $fixture 'scripts')
     # The child measures its own console visibility, including paths with spaces.
@@ -44,11 +45,21 @@ exit EXIT_CODE
     }
     Write-Output 'PASS: hidden console and exit codes 0/7.'
     $installer = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
-    # The scheduled run does not inherit this environment, so the fixture's own
-    # installer carries the task name and keeps the bridge off the real profile.
+    # The scheduled run starts in the real profile, not in this environment, so the
+    # fixture's own installer carries the task name and the isolated profile:
+    # otherwise it would link skills and record bindings of this temporary
+    # library in the user's own profile, where they outlive the test.
     $installer = $installer.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $taskName + '"'))
-    $installer = ([regex]"\`$ErrorActionPreference = 'Stop'").Replace($installer, "`$ErrorActionPreference = 'Stop'`r`n`$env:SKILLARIUM_NO_BRIDGE = '1'", 1)
-    Assert-True ($installer.Contains($taskName) -and $installer.Contains('SKILLARIUM_NO_BRIDGE = ')) 'Cannot isolate the fixture installer.'
+    $isolation = "`r`n`$env:SKILLARIUM_NO_BRIDGE = '1'"
+    foreach ($key in @('HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA')) {
+        $isolation += "`r`n`$env:$key = '" + [Environment]::GetEnvironmentVariable($key, 'Process').Replace("'", "''") + "'"
+    }
+    # PowerShell fills its own read-only $HOME before the script runs; the client links under it.
+    $isolation += "`r`nSet-Variable -Name HOME -Value '" + $env:USERPROFILE.Replace("'", "''") + "' -Scope Global -Force"
+    $anchor = "`$ErrorActionPreference = 'Stop'"
+    $at = $installer.IndexOf($anchor)
+    Assert-True ($at -ge 0 -and $installer.Contains($taskName)) 'Cannot isolate the fixture installer.'
+    $installer = $installer.Insert($at + $anchor.Length, $isolation)
     $installer | Set-Content -LiteralPath (Join-Path $fixture 'install.ps1') -Encoding UTF8
     foreach ($script in @('client.ps1', 'bindings.ps1', 'locate.ps1', 'bridge.ps1')) {
         Copy-Item -LiteralPath (Join-Path $root "scripts\$script") -Destination (Join-Path $fixture 'scripts')

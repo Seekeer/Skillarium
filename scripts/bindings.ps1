@@ -43,6 +43,41 @@ function Write-TextFile {
     }
 }
 
+# A library in the temporary folder that no longer exists: what a test run leaves behind.
+function Test-DisposableLibrary {
+    param([string]$Path)
+    if (-not $Path -or (Test-Path -LiteralPath $Path)) { return $false }
+    $full = [IO.Path]::GetFullPath($Path)
+    $roots = @([IO.Path]::GetTempPath(), $env:TEMP, $env:TMP,
+        (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'))
+    foreach ($root in $roots) {
+        if (-not $root) { continue }
+        $prefix = [IO.Path]::GetFullPath($root).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+        if ($full.StartsWith($prefix, $pathComparison)) { return $true }
+    }
+    return $false
+}
+
+# Removes the links and exclude lines the vanished library still owned, keeps its
+# state file aside for reference and starts this library with fresh state.
+function Clear-DisposableBindings {
+    param([hashtable]$Loaded)
+    $aside = "$bindingsFile.orphaned-$(Get-Date -Format yyyyMMddHHmmss)"
+    Copy-Item -LiteralPath $bindingsFile -Destination $aside
+    $script:state = $Loaded
+    $cleaned = $true
+    foreach ($link in @($script:state.links.Keys)) { if (-not (Remove-OwnedLink $link)) { $cleaned = $false } }
+    if (-not (Remove-UnusedExcludes)) { $cleaned = $false }
+    if (-not $cleaned) {
+        # The state file stays untouched, so the next run retries what is still owned.
+        throw "Cleanup of the removed temporary library $($Loaded.library) is incomplete; its records stay in $bindingsFile for the next run."
+    }
+    Remove-Item -LiteralPath $bindingsFile
+    [Console]::Error.WriteLine("NOTE: local bindings of the removed temporary library $($Loaded.library) cleared; the old state is kept in $aside")
+    $script:state = @{version = 1; library = $repo; projects = @{}; global = @{}; links = @{}; excludes = @{}}
+    $script:savedState = ''
+}
+
 function Read-Bindings {
     if (-not (Test-Path -LiteralPath $bindingsFile)) {
         $script:state = @{version = 1; library = $repo; projects = @{}; global = @{}; links = @{}; excludes = @{}}
@@ -54,7 +89,17 @@ function Read-Bindings {
         @('projects', 'global', 'links', 'excludes' | Where-Object { $loaded[$_] -isnot [hashtable] }).Count) {
         throw "Invalid local bindings state preserved: $bindingsFile"
     }
-    if (-not (Test-SamePath $loaded.library $repo)) { throw "Local bindings belong to another library: $($loaded.library)" }
+    if (-not (Test-SamePath $loaded.library $repo)) {
+        if (Test-LibraryFolder $loaded.library) {
+            throw "Local bindings belong to another library: $($loaded.library). Connect that library, or move $bindingsFile aside to start over with this one."
+        }
+        if (-not (Test-DisposableLibrary $loaded.library)) {
+            # A disconnected drive or a moved clone looks the same as a deleted one; never guess.
+            throw "Local bindings belong to library $($loaded.library), which is not available now. Reconnect it, or move $bindingsFile aside to start over with this one."
+        }
+        Clear-DisposableBindings $loaded
+        return
+    }
     $script:state = $loaded
     $script:savedState = ConvertTo-Json -InputObject $loaded -Depth 10
 }
