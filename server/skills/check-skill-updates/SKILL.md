@@ -19,7 +19,7 @@ Skillarium или `--repo`/`--library`. Ниже пути даны относи�
 `error`. Предложения видны всем машинам как ветки
 `agent-skills/update/<name>/<ключ>`; на клиенте без Python используй
 `install.sh --updates/--review/--approve/--resolve` (Windows: `install.ps1
--Mode Updates|Review|Approve|Resolve`), см. библиотечный скилл
+-Mode Updates|Review|Approve|Resolve`), см. клиентский скилл
 review-skill-updates.
 
 При просьбе проанализировать изменения сравни базу (`origin/main:upstream/<name>`),

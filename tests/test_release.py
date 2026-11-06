@@ -33,6 +33,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn('scripts/locate.sh', names)
             self.assertIn('server/manage.py', names)
             self.assertIn('.codex/skills/maintain-skill-catalogs/SKILL.md', names)
+            self.assertIn('client/skills/review-skill-updates/SKILL.md', names)
             self.assertFalse([name for name in names if name.startswith(('app/', 'tests/', 'skills/'))], names)
             with zipfile.ZipFile(Path(first) / (base + '.zip')) as archive:
                 self.assertEqual(sorted(archive.namelist()), sorted(names))

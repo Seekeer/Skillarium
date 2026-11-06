@@ -471,6 +471,42 @@ function Install-Registry {
     if ($failed) { throw 'Some catalog skills could not be linked.' }
 }
 
+# Skills of the engine itself (client\skills\<name>), linked through the engine path so they
+# follow its updates. A library skill of the same name wins; a link left dangling by a skill
+# the library dropped, or one into another engine copy, is replaced.
+function Install-BuiltinSkills {
+    $root = Join-Path $engine 'client\skills'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $true }
+    $ok = $true
+    foreach ($folder in Get-ChildItem -LiteralPath $root -Directory -Force) {
+        $name = $folder.Name
+        if ($name -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { continue }
+        if (-not (Test-Path -LiteralPath (Join-Path $folder.FullName 'SKILL.md') -PathType Leaf)) { continue }
+        if (Test-Path -LiteralPath (Join-Path $repo "skills\$name")) { continue }
+        $target = Join-Path $root $name
+        foreach ($catalog in Get-LinkRoots) {
+            $destination = Join-Path $catalog $name
+            try {
+                $link = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+                if ($link) {
+                    if ($link.LinkType -notin @('Junction', 'SymbolicLink')) { throw "CONFLICT (kept): $destination" }
+                    $old = [string]@($link.Target)[0]
+                    if ([string]::Equals($old.TrimEnd('\'), $target, [StringComparison]::OrdinalIgnoreCase)) { continue }
+                    $resolved = if ([IO.Path]::IsPathRooted($old)) { $old } else { Join-Path $catalog $old }
+                    $dangling = -not (Test-Path -LiteralPath $resolved)
+                    if (-not $dangling -and $old.TrimEnd('\') -notlike "*\client\skills\$name") { throw "CONFLICT (kept): $destination" }
+                    if ($link.LinkType -eq 'Junction') { [IO.Directory]::Delete($destination) }
+                    else { Remove-Item -LiteralPath $destination -Force }
+                }
+                [IO.Directory]::CreateDirectory($catalog) | Out-Null
+                New-SkillLink -Path $destination -Target $target
+                Write-Host "LINKED: $destination"
+            } catch { Write-Warning $_.Exception.Message; $ok = $false }
+        }
+    }
+    return $ok
+}
+
 # --- Status and external update proposals ------------------------------------
 
 function Get-Trailer {

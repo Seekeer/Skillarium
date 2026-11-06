@@ -411,6 +411,36 @@ install_registry() {
     return "$errors"
 }
 
+# Skills of the engine itself (client/skills/<name>), linked through the engine path so they
+# follow its updates. A library skill of the same name wins; a link left dangling by a skill
+# the library dropped, or one into another engine copy, is replaced.
+link_builtin_skills() {
+    local folder name target catalog link old temporary errors=0
+    for folder in "$engine"/client/skills/*/; do
+        [[ -f "$folder/SKILL.md" ]] || continue
+        target=${folder%/}; name=${target##*/}
+        [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || continue
+        [[ ! -e "$repo/skills/$name" ]] || continue
+        while IFS= read -r catalog; do
+            link="$catalog/$name"
+            if [[ -L "$link" && $(readlink -- "$link") == "$target" ]]; then continue; fi
+            if [[ -e "$link" || -L "$link" ]]; then
+                old=$(readlink -- "$link") || old=''
+                if [[ ! -L "$link" ]] || { [[ -e "$link" ]] && [[ "$old" != */client/skills/"$name" ]]; }; then
+                    echo "CONFLICT (kept): $link" >&2; errors=1; continue
+                fi
+            fi
+            mkdir -p -- "$catalog" || return 1
+            temporary="$catalog/.$name-new"
+            [[ ! -e "$temporary" && ! -L "$temporary" ]] || { echo "Temporary link preserved: $temporary" >&2; errors=1; continue; }
+            ln -s -- "$target" "$temporary" || return 1
+            if ! mv -Tf -- "$temporary" "$link"; then rm -- "$temporary"; errors=1; continue; fi
+            echo "LINKED: $link"
+        done < <(link_roots)
+    done
+    return "$errors"
+}
+
 # --- Status and external update proposals ------------------------------------
 
 trailer() {

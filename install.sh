@@ -59,6 +59,7 @@ result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
 # Global links and registered project bindings follow the local choices.
 { load_bindings && apply_bindings; } || result=1
+link_builtin_skills || result=1
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install && "$mode" != --sync-only ]]; then exit 0; fi
 

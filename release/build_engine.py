@@ -26,7 +26,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATHS = ('install.sh', 'install.ps1', 'projects.sh', 'projects.ps1', 'scripts/', 'server/',
-                'templates/', '.codex/skills/', 'README.md', '.gitattributes')
+                'templates/', 'client/', '.codex/skills/', 'README.md', '.gitattributes')
 # Oldest library format this engine still reads (and could migrate from).
 MIN_FORMAT = 1
 DEFAULT_BASE_URL = 'https://github.com/Seekeer/Skillarium/releases/download'

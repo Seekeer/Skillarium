@@ -73,6 +73,32 @@ class EngineLayout:
         self.assertIn('engine edit', self.lib.show('skills/first-skill/SKILL.md'))
         self.assertFalse((self.engine / 'skills').exists())
 
+    def test_builtin_skills_are_linked_unless_the_library_has_them(self):
+        shutil.copytree(ROOT / 'client', self.engine / 'client')
+        builtin = self.engine / 'client' / 'skills' / 'review-skill-updates'
+        # A link left by the library's own copy of the skill, which the library since dropped.
+        dangling = self.lib.installed('review-skill-updates')
+        dangling.parent.mkdir(parents=True, exist_ok=True)
+        gone = self.lib.root / 'dropped'
+        gone.mkdir()
+        if WINDOWS:
+            subprocess.run(['cmd', '/c', 'mklink', '/J', str(dangling), str(gone)], check=True, capture_output=True)
+        else:
+            dangling.symlink_to(gone, target_is_directory=True)
+        gone.rmdir()
+        self.run_client('sync', library=self.client)
+        for catalog in ('.agents', '.claude'):
+            self.assertTrue(os.path.samefile(self.lib.installed('review-skill-updates', catalog), builtin))
+        # A library skill of the same name wins over the built-in one.
+        (self.engine / 'client' / 'skills' / 'own-check').mkdir()
+        (self.engine / 'client' / 'skills' / 'own-check' / 'SKILL.md').write_text(
+            '---\nname: own-check\ndescription: Built-in\n---\n', encoding='utf-8')
+        own = self.client / 'skills' / 'own-check'
+        own.mkdir()
+        (own / 'SKILL.md').write_text('---\nname: own-check\ndescription: Library\n---\n', encoding='utf-8')
+        self.run_client('sync', library=self.client)
+        self.assertTrue(os.path.samefile(self.lib.installed('own-check'), own))
+
     def test_environment_and_configuration_find_the_library(self):
         self.run_client('sync', env={'SKILLARIUM_LIBRARY': str(self.client)})
         self.assertTrue(self.lib.installed().exists())

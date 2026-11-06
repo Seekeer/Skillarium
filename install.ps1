@@ -74,6 +74,7 @@ try {
     # Global links and registered project bindings follow the local choices.
     Read-Bindings
     if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
+    if (-not (Install-BuiltinSkills)) { throw 'Some built-in skills could not be linked; existing files were preserved.' }
     if ($failed) { throw 'Synchronization incomplete; existing files were preserved.' }
     if ($Mode -in @('Install', 'Sync')) {
         # Legacy layout (this engine inside the library): once Skillarium is installed, the task
