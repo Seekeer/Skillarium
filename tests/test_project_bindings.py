@@ -88,6 +88,72 @@ class ProjectBindingTests(unittest.TestCase):
                 os.rmdir(path) if WINDOWS and os.path.isjunction(str(path)) else os.unlink(path)
         self.temp.cleanup()
 
+    def test_bindings_of_a_vanished_library_are_set_aside(self):
+        state = (self.home / 'AppData/Local/agent-skills' if WINDOWS else self.home / '.local/state/agent-skills')
+        state = state / 'bindings.json'
+        data = json.loads(state.read_text(encoding='utf-8'))
+        original = dict(data)
+        # A test run left state of a temporary library that is gone, with a link it owned.
+        vanished = self.root / 'deleted test library'
+        target = vanished / 'skills' / 'ghost-skill'
+        target.mkdir(parents=True)
+        link = self.home / '.agents' / 'skills' / 'ghost-skill'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if WINDOWS:
+            subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], check=True, capture_output=True)
+        else:
+            os.symlink(target, link)
+        shutil.rmtree(vanished)
+        data['library'] = str(vanished)
+        data['links'] = dict(data['links'], **{str(link): {'target': str(target), 'skill': 'ghost-skill',
+                                                           'project': None, 'exclude': None}})
+        state.write_text(json.dumps(data), encoding='utf-8')
+        self.assertIn('removed temporary library', self.background())
+        self.assertTrue(os.path.samefile(json.loads(state.read_text(encoding='utf-8'))['library'], self.library))
+        self.assertEqual(len(list(state.parent.glob('bindings.json.orphaned-*'))), 1)
+        self.assertFalse(is_link(link) or link.exists())
+        # A library that is only unavailable (a disconnected drive, a moved clone) is never guessed away.
+        unavailable = 'Z:\\Skillarium\\unavailable library' if WINDOWS else '/nonexistent/skillarium library'
+        state.write_text(json.dumps(dict(original, library=unavailable)), encoding='utf-8')
+        self.assertIn('not available now', self.background(expected=1))
+        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], unavailable)
+        # State of a library that still exists is never taken over.
+        other = self.root / 'other library'
+        other.mkdir()
+        for name in ('sources.json', 'agent-skills.json'):
+            (other / name).write_text('{}', encoding='utf-8')
+        data['library'] = str(other)
+        state.write_text(json.dumps(data), encoding='utf-8')
+        self.assertIn('belong to another library', self.background(expected=1))
+        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], str(other))
+
+    def test_interrupted_cleanup_of_a_vanished_library_is_retried(self):
+        if not WINDOWS and os.geteuid() == 0:
+            self.skipTest('root ignores the permissions that make cleanup fail')
+        state = (self.home / 'AppData/Local/agent-skills' if WINDOWS else self.home / '.local/state/agent-skills')
+        state = state / 'bindings.json'
+        data = json.loads(state.read_text(encoding='utf-8'))
+        exclude = self.root / 'project' / '.git' / 'info' / 'exclude'
+        exclude.parent.mkdir(parents=True)
+        exclude.write_text('# kept\n/.agents/skills/ghost-skill\n', encoding='utf-8', newline='\n')
+        data['library'] = str(self.root / 'deleted test library')
+        data['excludes'] = {str(exclude): ['/.agents/skills/ghost-skill']}
+        state.write_text(json.dumps(data), encoding='utf-8')
+        # The exclude file cannot be rewritten: cleanup stops and keeps everything.
+        locked = exclude if WINDOWS else exclude.parent
+        mode = locked.stat().st_mode
+        locked.chmod(0o444 if WINDOWS else 0o555)
+        try:
+            self.assertIn('incomplete', self.background(expected=1))
+        finally:
+            locked.chmod(mode)
+        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], data['library'])
+        self.assertIn('ghost-skill', exclude.read_text(encoding='utf-8'))
+        # Once the file is writable again, the next run finishes the cleanup.
+        self.assertIn('removed temporary library', self.background())
+        self.assertEqual(exclude.read_text(encoding='utf-8').strip(), '# kept')
+        self.assertTrue(os.path.samefile(json.loads(state.read_text(encoding='utf-8'))['library'], self.library))
+
     # Helpers -----------------------------------------------------------------
     def git(self, cwd, *args):
         return subprocess.run(['git', '-C', str(cwd), *args], env=self.env, text=True,

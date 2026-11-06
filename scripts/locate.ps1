@@ -16,8 +16,9 @@ function Get-SkillariumConfigPath {
 
 function Test-LibraryFolder {
     param([string]$Path)
-    return ($Path -and (Test-Path -LiteralPath (Join-Path $Path 'sources.json') -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $Path 'agent-skills.json') -PathType Leaf))
+    # Path.Combine, not Join-Path: a library on a disconnected drive is just absent.
+    return ($Path -and (Test-Path -LiteralPath ([IO.Path]::Combine($Path, 'sources.json')) -PathType Leaf) -and
+        (Test-Path -LiteralPath ([IO.Path]::Combine($Path, 'agent-skills.json')) -PathType Leaf))
 }
 
 function Resolve-Library {
