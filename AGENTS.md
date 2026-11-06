@@ -20,14 +20,16 @@
 только `manage.py assign-server`. Не меняй личные настройки автора Git
 пользователя: служебная идентичность задаётся на одну команду.
 
-Для добавления источника прочитай
-[add-shared-skill](.codex/skills/add-shared-skill/SKILL.md).
-Для обновлений и конфликтов —
-[check-skill-updates](.codex/skills/check-skill-updates/SKILL.md).
-Для сервера, назначения роли, хостинга и миграции —
-[maintain-skill-catalogs](.codex/skills/maintain-skill-catalogs/SKILL.md).
-Команды и границы автоматизации: [README.md](README.md),
-[server/README.md](server/README.md).
+Новый скилл добавляет `skillarium add <ссылка или папка>` (`manage.py add`);
+обновления и конфликты разбирает встроенный скилл
+[review-skill-updates](client/skills/review-skill-updates/SKILL.md). Команды и
+границы автоматизации: [README.md](README.md), [server/README.md](server/README.md).
+
+Без явной просьбы пользователя не выпускай движок (тег `v<версия>`), не
+выбирай и не меняй назначенный сервер, не меняй настройки хостинга `main`
+(проверяй их на отдельном тестовом репозитории) и не архивируй прежние
+репозитории. Ручные правки клиентских копий на станциях не затирай
+reset/clean: сравни с эталоном и перенеси нужное.
 
 Клиентам Python не нужен; Python нужен только исполнителю серверной логики.
 Изменения клиентских файлов делай в корне и обновляй

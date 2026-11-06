@@ -31,6 +31,9 @@ Usage: skillarium <command>
                                  hourly self-update timer (machines without the app)
   server ...                     set up the library server (see: skillarium server --help)
   client ...                     connect this machine to a library (see: skillarium client --help)
+  add <folder|link> [--policy auto|confirm]
+                                 add a skill: an own folder, or a link to a repository,
+                                 a skill folder or its SKILL.md (see: skillarium add --help)
 EOF
 }
 
@@ -439,6 +442,12 @@ case "$command" in
     disable-updates) cmd_disable_updates ;;
     server) run_role server/setup.sh "$@" ;;
     client) run_role scripts/setup-client.sh "$@" ;;
+    add)
+        command -v python3 >/dev/null || die 'skillarium add needs Python 3'
+        if [[ ! -f "$home/current/VERSION" ]]; then
+            (cmd_install) || exit 1
+        fi
+        exec python3 "$home/current/server/manage.py" add "$@" ;;
     help|--help|-h) usage ;;
     *) usage >&2; exit 2 ;;
 esac

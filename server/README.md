@@ -57,6 +57,22 @@ python3 server/manage.py maintain --apply-auto
 
 ## Команды сервера
 
+Новый скилл — одна команда на любой машине, где есть Python:
+
+```bash
+skillarium add https://github.com/owner/repo/tree/main/skills/example   # папка, её SKILL.md или репозиторий
+skillarium add ~/my-skill                                                # своя папка
+```
+
+По ссылке `add` сам находит репозиторий, ветку или тег и папку (GitHub,
+GitLab, Gitea/Forgejo, raw.githubusercontent.com; другой HTTPS-адрес — один
+файл SKILL.md), берёт имя из SKILL.md, а если по ссылке несколько скиллов,
+перечисляет их. Политику обновлений спрашивает, если не задан `--policy
+auto|confirm`; `--dry-run` только проверяет ссылку. Внешний источник
+регистрирует назначенный сервер; своя папка идёт как `import-local`.
+`skillarium add` вызывает `manage.py add` установленного движка. Те же
+действия по отдельности:
+
 ```bash
 python3 server/manage.py register example --git-url https://example.org/owner/repo.git --path skills/example --ref refs/heads/main --policy auto
 python3 server/manage.py register example --url https://example.org/SKILL.md --policy confirm

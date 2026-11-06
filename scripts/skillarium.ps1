@@ -26,6 +26,9 @@ Usage: skillarium <command>
   enable-updates | disable-updates
                                  hourly self-update task (machines without the app)
   client ...                     connect this machine to a library (skillarium client -Help)
+  add <folder|link> [--policy auto|confirm]
+                                 add a skill: an own folder, or a link to a repository,
+                                 a skill folder or its SKILL.md (skillarium add --help)
 '@
 }
 
@@ -383,6 +386,20 @@ try {
             if (-not (Get-CurrentVersion)) { Invoke-Install @() }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
+            $code = $LASTEXITCODE
+        }
+        'add' {
+            # py first: on a machine without Python, python3/python are Store stubs.
+            $python = $null
+            foreach ($candidate in @(@('py', '-3'), @('python'), @('python3'))) {
+                $found = Get-Command $candidate[0] -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found -and $found.Source -notlike '*\WindowsApps\*') { $python = @($found.Source) + @($candidate | Select-Object -Skip 1); break }
+            }
+            if (-not $python) { throw 'skillarium add needs Python 3 (python.org or winget install Python.Python.3.12).' }
+            if (-not (Get-CurrentVersion)) { Invoke-Install @() }
+            if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
+            $pythonArgs = @($python | Select-Object -Skip 1)
+            & $python[0] @pythonArgs (Join-Path $root 'current\server\manage.py') add @rest
             $code = $LASTEXITCODE
         }
         { $_ -in @('help', '--help', '-h', '-Help') } { Show-Usage }

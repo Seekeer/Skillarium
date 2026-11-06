@@ -98,7 +98,8 @@ class Library:
 
     def manage(self, *args, repo=None, expected=0):
         result = subprocess.run([sys.executable, str(ROOT / 'server/manage.py'), '--repo', str(repo or self.server), *args],
-                                env=self.env, capture_output=True, text=True, encoding='utf-8')
+                                env=self.env, capture_output=True, text=True, encoding='utf-8',
+                                stdin=subprocess.DEVNULL)
         output = result.stdout + result.stderr
         if expected is not None:
             self.case.assertEqual(result.returncode, expected, output)

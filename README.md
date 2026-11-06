@@ -97,6 +97,10 @@ curl -fsSL https://github.com/Seekeer/Skillarium/releases/latest/download/skilla
   движка (например, после `self-update --channel beta`), он остаётся.
 - На Windows `current` — junction, и его замена занимает два шага (удалить и
   создать); синхронизация, попавшая ровно в этот момент, пропускает один час.
+- `skillarium add <ссылка или папка>` — добавить скилл в библиотеку: ссылка
+  на репозиторий, папку скилла или его SKILL.md, или своя папка (нужен
+  Python; внешний источник регистрирует назначенный сервер, см.
+  [server/README.md](server/README.md#команды-сервера)).
 - `skillarium status` — версия, канал, формат библиотеки и режим;
   `skillarium rollback` — вернуться на предыдущую версию (она пропускается до
   следующего выпуска); `skillarium self-update --channel beta` — канал

@@ -16,6 +16,7 @@ import tempfile
 
 import absorb_updater
 import hosting
+import links
 import maintenance
 import skills
 
@@ -143,6 +144,64 @@ def import_local(repo, directory, name, dry_run, publish):
     return 0
 
 
+def source_skill_name(source):
+    """The name from SKILL.md of the source; a folder of several skills is listed back."""
+    if source['kind'] == 'url':
+        return skills.validate_skill_text(skills.download(source['url']).decode('utf-8-sig'))
+    revision = skills.latest_revision(source)
+    found = skills.git_skill_files(source, revision)
+    if 'SKILL.md' in found:
+        return skills.validate_skill_text(skills.git_skill_text(source, revision))
+    if not found:
+        raise ValueError('По этой ссылке нет SKILL.md.')
+    folders = [str(Path(item).parent.as_posix()) for item in found]
+    shown = ', '.join(folders[:20]) + (f' и ещё {len(folders) - 20}' if len(folders) > 20 else '')
+    raise ValueError(f'По этой ссылке несколько скиллов: {shown}. '
+                     'Дайте ссылку на папку одного из них или добавьте --path <папка>.')
+
+
+def ask_policy():
+    missing = 'Укажите политику обновлений: --policy auto или --policy confirm.'
+    if not sys.stdin or not sys.stdin.isatty():
+        raise ValueError(missing)
+    while True:
+        try:
+            answer = input('Применять совместимые обновления автоматически (auto) или подтверждать каждое (confirm)? ')
+        except EOFError:
+            print()
+            raise ValueError(missing) from None
+        if answer.strip().lower() in ('auto', 'confirm'):
+            return answer.strip().lower()
+
+
+def add(repo, args):
+    """One entry point for a new skill: an own folder, or a link to an external source."""
+    if Path(args.link).is_dir():
+        if args.policy or args.path or args.ref:
+            raise ValueError('Для своей папки --policy, --path и --ref не нужны: у неё нет внешнего источника.')
+        return import_local(repo, Path(args.link), args.name, args.dry_run, args.publish)
+    source = links.parse(args.link)
+    if source['kind'] == 'git':
+        if args.path:
+            source['path'] = str(Path(args.path).as_posix()).strip('/') or '.'
+        if args.ref:
+            source['ref'] = args.ref if args.ref.startswith('refs/') else 'refs/heads/' + args.ref
+    elif args.path or args.ref:
+        raise ValueError('Ссылка ведёт на один файл: --path и --ref к ней не применяются.')
+    name = source_skill_name(source)
+    if args.name and args.name != name:
+        raise ValueError(f'В SKILL.md указано имя {name}, а не {args.name}.')
+    where = source['url'] if source['kind'] == 'url' else f"{source['url']} {source['ref']} {source['path']}"
+    print(f'Скилл {name}: {where}')
+    if args.dry_run:
+        print('Проверка завершена без изменений.')
+        return 0
+    policy = args.policy or ask_policy()
+    skills.set_catalog(repo)
+    with maintenance.library_lock(repo):
+        return maintenance.register(repo, name, source, policy)
+
+
 def dispatch(args):
     # The client manifest describes the engine's own files, wherever the library is.
     if args.command == 'client-manifest':
@@ -154,6 +213,8 @@ def dispatch(args):
         return absorb_updater.absorb(repo, args.updater, args.revision)
     if args.command in ('register-local', 'import-local'):
         return import_local(repo, args.directory, getattr(args, 'name', None), args.dry_run, args.publish)
+    if args.command == 'add':
+        return add(repo, args)
     if args.command == 'status':
         # Only a library that still carries the engine files has a client manifest.
         if (repo / MANIFEST).is_file():
@@ -192,8 +253,8 @@ def main():
                         help='Library working copy (default: SKILLARIUM_LIBRARY, this repository, the configured library)')
     parser.add_argument('--catalog', help='Compatibility: the only library is agent-skills')
     commands = parser.add_subparsers(dest='command', required=True)
-    names = ('status', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server', 'pin-policy',
-             'register-local', 'import-local', 'deploy-client', 'client-manifest', 'absorb-updater')
+    names = ('status', 'add', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server',
+             'pin-policy', 'register-local', 'import-local', 'deploy-client', 'client-manifest', 'absorb-updater')
     for command in names:
         sub = commands.add_parser(command)
         # Publication is always a pull request; --publish remains for compatibility.
@@ -226,6 +287,15 @@ def main():
             sub.description = 'Импорт собственной папки скилла; имя из SKILL.md, публикация через PR клиента.'
             sub.add_argument('directory', type=Path, help='Папка с SKILL.md, скриптами и справочными файлами')
             sub.add_argument('--no-publish', dest='publish', action='store_false', help='Скопировать без синхронизации')
+        if command == 'add':
+            sub.description = ('Добавить скилл: своя папка (публикуется синхронизацией клиента) или ссылка на '
+                               'репозиторий, папку скилла или его SKILL.md (регистрирует назначенный сервер).')
+            sub.add_argument('link', help='Папка скилла или ссылка, скопированная из браузера')
+            sub.add_argument('--name', help='Проверить, что SKILL.md называет скилл так')
+            sub.add_argument('--policy', choices=('auto', 'confirm'), help='Без него команда спросит')
+            sub.add_argument('--path', help='Папка скилла в репозитории, если ссылка ведёт на сам репозиторий')
+            sub.add_argument('--ref', help='Ветка или полный ref вместо основной ветки')
+            sub.add_argument('--no-publish', dest='publish', action='store_false', help='Своя папка: только скопировать')
         if command == 'client-manifest':
             sub.add_argument('--write', action='store_true')
         if command == 'absorb-updater':
@@ -246,7 +316,7 @@ def main():
         args.policy = 'auto' if args.auto_update == 'yes' else 'confirm'
     if args.command == 'resolve' and args.strategy != 'detach' and (not args.revision or not args.commit):
         parser.error('--revision and --commit are required except for --strategy detach')
-    if args.command == 'import-local' and args.dry_run:
+    if args.command in ('import-local', 'add') and args.dry_run:
         args.publish = False
     args.apply_auto = getattr(args, 'apply_auto', False)
     if args.catalog not in (None, 'agent-skills') and (args.repo is None or args.catalog != args.repo.resolve().name):

@@ -162,6 +162,24 @@ class ServerTests(unittest.TestCase):
         lib.manage('approve', 'first-skill', '--commit', old_values['head'], '--revision', old, expected=1)
         self.assertIn('version one', lib.show('skills/first-skill/SKILL.md'))
 
+    def test_add_names_the_skill_from_its_source(self):
+        lib = self.lib
+        lib.write_skill('another-skill', 'second', root=lib.upstream / 'skills')
+        lib.commit(lib.upstream, 'Second skill')
+        listed = lib.manage('add', lib.upstream.as_uri(), '--policy', 'auto', expected=1)
+        self.assertIn('несколько скиллов: skills/another-skill, skills/first-skill', listed)
+        self.assertIn('нет SKILL.md', lib.manage('add', lib.upstream.as_uri(), '--path', 'missing',
+                                                 '--policy', 'auto', expected=1))
+        self.assertIn('Укажите политику', lib.manage('add', lib.upstream.as_uri(), '--path', 'skills/another-skill',
+                                                     expected=1))
+        self.assertIn('Registered: another-skill', lib.manage('add', lib.upstream.as_uri(), '--path',
+                                                               'skills/another-skill', '--policy', 'confirm'))
+        entry = lib.registry()['skills']['another-skill']
+        self.assertEqual(entry['source'], dict(kind='git', url=lib.upstream.as_uri(), path='skills/another-skill',
+                                               ref='refs/heads/main'))
+        self.assertFalse(entry['auto_update'])
+        self.assertIn('second', lib.show('skills/another-skill/SKILL.md'))
+
     def test_client_edit_is_merged_with_upstream_and_mode_respected(self):
         lib = self.lib
         self.edit_shared('local.md', b'our addition\n')

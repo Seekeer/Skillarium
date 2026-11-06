@@ -222,7 +222,8 @@ def latest_revision(source):
     return revision
 
 
-def extract_git(source, revision, destination):
+def git_mirror(source, revision):
+    """Cached bare copy of the source holding this revision."""
     if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', revision):
         raise ValueError('Expected a complete Git object ID')
     mirror = cache_root() / 'repositories' / hashlib.sha256(source['url'].encode()).hexdigest()
@@ -233,6 +234,29 @@ def extract_git(source, revision, destination):
         git('cat-file', '-e', revision + '^{commit}', cwd=mirror)
     except ValueError:
         git('fetch', '--no-tags', '--depth=1', source['url'], revision, cwd=mirror)
+    return mirror
+
+
+def git_skill_files(source, revision):
+    """Paths of the SKILL.md files under the source folder, relative to it."""
+    mirror = git_mirror(source, revision)
+    relative = str(PurePosixPath(source.get('path', '.')))
+    names = git('ls-tree', '-r', '--name-only', revision, '--', '.' if relative == '.' else relative + '/',
+                cwd=mirror).decode('utf-8').splitlines()
+    prefix = '' if relative == '.' else relative + '/'
+    return sorted(name[len(prefix):] for name in names
+                  if name.startswith(prefix) and PurePosixPath(name).name == 'SKILL.md')
+
+
+def git_skill_text(source, revision):
+    mirror = git_mirror(source, revision)
+    relative = str(PurePosixPath(source.get('path', '.')))
+    return git('show', revision + ':' + ('SKILL.md' if relative == '.' else relative + '/SKILL.md'),
+               cwd=mirror).decode('utf-8-sig')
+
+
+def extract_git(source, revision, destination):
+    mirror = git_mirror(source, revision)
     relative = str(PurePosixPath(source.get('path', '.')))
     tree = revision if relative == '.' else revision + ':' + relative
     archive = git('archive', '--format=tar', tree, cwd=mirror)
