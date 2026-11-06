@@ -200,20 +200,17 @@ Linux-таймер работает при активном пользовате
 синхронизация ставит на них ссылки, а одноимённый скилл библиотеки важнее):
 
 ```bash
-bash install.sh --updates
-bash install.sh --review <skill>
-bash install.sh --approve <skill> <commit>
-bash install.sh --resolve <skill> <commit> keep-ours|take-upstream|merged
+skillarium updates
+skillarium review <skill>
+skillarium approve <skill> <commit>
+skillarium resolve <skill> <commit> keep-ours|take-upstream|merged
 ```
 
-```powershell
-.\install.ps1 -Mode Updates
-.\install.ps1 -Mode Review -Skill <skill>
-.\install.ps1 -Mode Approve -Skill <skill> -Commit <commit>
-.\install.ps1 -Mode Resolve -Skill <skill> -Commit <commit> -Strategy keep-ours
-```
+Это те же режимы установщика (`install.sh --updates|--review|--approve|--resolve`,
+`install.ps1 -Mode Updates|Review|Approve|Resolve`) установленного движка для
+библиотеки из конфига.
 
-`--review` показывает итоговый diff относительно текущей общей версии и
+`review` показывает итоговый diff относительно текущей общей версии и
 готовит копию для разбора в `.git/agent-skills-review/<skill>` (вне
 установки; при конфликте — с маркерами). Одобряется точный показанный коммит:
 если предложение, общая папка или входящая версия изменились, команда

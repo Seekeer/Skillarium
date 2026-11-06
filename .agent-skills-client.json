@@ -1,7 +1,7 @@
 {
   "files": {
     ".gitattributes": "33a26aeab410c1c325f572e28eb94da61d399d412ad4cfec2e8b101f767d6f4b",
-    "README.md": "2aaef7eae1903c03f78d3330dc7a4ed81ae23e3fbb186492c5e3ec26a7bf8ff2",
+    "README.md": "e665f0c637f22af23d6ff6c3be4bc8b55fd77191ea4205735b7629be61c85228",
     "install.ps1": "855710ef519d9b710851480b2cdb8a278f330cb5fca5b1f6c13a2aac08642283",
     "install.sh": "8a8e0c3611a552edf448fa504020a47b3acd4670c9af157a48fda99c93cf718f",
     "projects.ps1": "70f3215c8a8ad702bd0bc6c05cba59792a3ca894f5d88e01749135d8f9affc88",
@@ -10,8 +10,8 @@
     "scripts/bindings.sh": "5033d4e9540cb7b007aae66e2f3dce9963f804e594981de7ad8c8801d911bc83",
     "scripts/bridge.ps1": "532b4f1ecbbf8c32296fd5c95038206279ee3d1ba0fc1690a80a024602b83072",
     "scripts/bridge.sh": "9e5c76836aceb83f2ebaf8c1588d69670a3ecb2b894253bf09059b12fccd2f7f",
-    "scripts/client.ps1": "7e36384e9a17d1b1a15efda4d2d1fd2813a09dcacb15b0a52d29117d93f060d4",
-    "scripts/client.sh": "d43ccb37efb21a2079ecef11cbb6f64ad8d554f450b0d1495e9bdbf9f1864bde",
+    "scripts/client.ps1": "cd50f6a87776293fa18907974c11772a4e8b65dd9d18a16044e77d8c4ccf7d6e",
+    "scripts/client.sh": "3839aa6895c52f6c09e85f6e41d085c4ad1b49e83bc441428a68d0e808e605cf",
     "scripts/locate.ps1": "429d1f54d59196d57c1ad570ed625b60d27b9d005185888fd63585fc5c11e4ce",
     "scripts/locate.sh": "3848aa56fe5bf578915d65178229d42491630970d076936da4ab8d7c3c7cfe98",
     "scripts/sync-hidden.vbs": "21a6da4064c064aef079fe122208c3e014e547c430732a92175483a76d12dfaa"
