@@ -147,6 +147,9 @@ class ServerSwitchTests(unittest.TestCase):
         shutil.copytree(ROOT / 'server', self.library / 'server')
         (self.library / 'scripts').mkdir()
         shutil.copy2(ROOT / 'scripts' / 'locate.sh', self.library / 'scripts' / 'locate.sh')
+        # A library in the legacy layout: the engine folder is the library.
+        shutil.copy2(ROOT / 'templates' / 'library' / 'agent-skills.json', self.library / 'agent-skills.json')
+        (self.library / 'sources.json').write_text('{"version": 2, "skills": {}}\n', encoding='utf-8')
         subprocess.run(['git', 'init', '-q', str(self.library)], check=True)
         self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / '.config'),
                         PATH=str(shims) + os.pathsep + os.environ['PATH'], GIT_CONFIG_GLOBAL=os.devnull)

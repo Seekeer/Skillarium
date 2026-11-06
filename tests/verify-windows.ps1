@@ -44,10 +44,17 @@ exit EXIT_CODE
     }
     Write-Output 'PASS: hidden console and exit codes 0/7.'
     $installer = Get-Content -LiteralPath (Join-Path $root 'install.ps1') -Raw
-    $installer.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $taskName + '"')) | Set-Content -LiteralPath (Join-Path $fixture 'install.ps1') -Encoding UTF8
-    Copy-Item -LiteralPath (Join-Path $root 'scripts\client.ps1') -Destination (Join-Path $fixture 'scripts')
-    Copy-Item -LiteralPath (Join-Path $root 'scripts\bindings.ps1') -Destination (Join-Path $fixture 'scripts')
+    # The scheduled run does not inherit this environment, so the fixture's own
+    # installer carries the task name and keeps the bridge off the real profile.
+    $installer = $installer.Replace('"AgentSkills-Hourly-$($identity.User.Value)"', ('"' + $taskName + '"'))
+    $installer = ([regex]"\`$ErrorActionPreference = 'Stop'").Replace($installer, "`$ErrorActionPreference = 'Stop'`r`n`$env:SKILLARIUM_NO_BRIDGE = '1'", 1)
+    Assert-True ($installer.Contains($taskName) -and $installer.Contains('SKILLARIUM_NO_BRIDGE = ')) 'Cannot isolate the fixture installer.'
+    $installer | Set-Content -LiteralPath (Join-Path $fixture 'install.ps1') -Encoding UTF8
+    foreach ($script in @('client.ps1', 'bindings.ps1', 'locate.ps1', 'bridge.ps1')) {
+        Copy-Item -LiteralPath (Join-Path $root "scripts\$script") -Destination (Join-Path $fixture 'scripts')
+    }
     '{"version":2,"skills":{}}' | Set-Content -LiteralPath (Join-Path $fixture 'sources.json') -Encoding ASCII
+    Copy-Item -LiteralPath (Join-Path $root 'templates\library\agent-skills.json') -Destination $fixture
     & git -C $fixture init -q
     Assert-True ($LASTEXITCODE -eq 0) 'Cannot initialize disposable repository.'
     Invoke-Installer Sync
