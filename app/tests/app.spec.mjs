@@ -303,6 +303,34 @@ test('explains unapplied connections and unavailable projects', async () => {
   await expect(page.getByRole('switch', { name: `Глобальный доступ: ${SHARED}` })).toHaveAttribute('aria-checked', 'false');
 });
 
+test('switches the update policy of an external skill and shows it as pending until published', async () => {
+  // OTHER comes from an external source; the library has no hosting, so publication waits.
+  const registry = JSON.parse(fs.readFileSync(path.join(fixture.seed, 'sources.json'), 'utf8'));
+  registry.skills[OTHER] = {
+    source: { kind: 'git', url: 'https://example.org/team/skills.git', path: `skills/${OTHER}`, ref: 'refs/heads/main' },
+    auto_update: true, revision: 'a'.repeat(40), content_sha256: 'b'.repeat(64), executable_sha256: 'c'.repeat(64),
+  };
+  fs.writeFileSync(path.join(fixture.seed, 'sources.json'), `${JSON.stringify(registry, null, 2)}\n`);
+  git(fixture.seed, fixture.env, 'commit', '-am', 'External skill');
+  git(fixture.seed, fixture.env, 'push', 'origin', 'main');
+  git(fixture.library, fixture.env, 'pull', '-q', '--ff-only');
+  session = await launch(fixture);
+  const { page } = session;
+  const policy = page.getByRole('switch', { name: `Обновлять автоматически: ${OTHER}` });
+  await expect(policy).toHaveAttribute('aria-checked', 'true');
+  await expect(row(page, OTHER).getByText('Принимаются сами')).toBeVisible();
+  await expect(row(page, SHARED).getByText('свой скилл')).toBeVisible();
+  await expect(page.getByRole('switch', { name: `Обновлять автоматически: ${SHARED}` })).toHaveCount(0);
+
+  await policy.click();
+  await expect(policy).toHaveAttribute('aria-checked', 'false');
+  await expect(row(page, OTHER).getByText('Ждёт принятия')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('будет опубликована при следующей синхронизации');
+  const local = JSON.parse(fs.readFileSync(path.join(fixture.library, 'sources.json'), 'utf8'));
+  expect(local.skills[OTHER].auto_update).toBe(false);
+  expect(git(fixture.library, fixture.env, 'log', '-1', '--format=%s')).toBe(`Set ${OTHER} update policy to confirm`);
+});
+
 test('a library of a newer format is shown as read-only with an update check', async () => {
   const config = path.join(fixture.library, 'agent-skills.json');
   const data = JSON.parse(fs.readFileSync(config, 'utf8'));

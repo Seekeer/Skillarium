@@ -417,6 +417,43 @@ function Sync-Repository {
     }
 }
 
+# The update policy of an external skill (auto: compatible updates are taken by the
+# server; confirm: each waits for a person). Any machine may switch it both ways: the
+# PR rule accepts a change of auto_update alone. One line of sources.json changes.
+function Set-UpdatePolicy {
+    param([string]$Name, [ValidateSet('auto', 'confirm')][string]$Policy)
+    Sync-Repository
+    $path = Join-Path $repo 'sources.json'
+    $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+    $entry = ($text | ConvertFrom-Json).skills.$Name
+    if (-not $entry) { throw "No skill $Name in the library." }
+    if ($entry.source.kind -eq 'local') { throw "$Name has no external source and no update policy." }
+    $value = $Policy -eq 'auto'
+    if ([bool]$entry.auto_update -eq $value) { Write-Output "${Name}: update policy already $Policy"; return }
+    $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = $text -split "`r?`n"
+    $start = [Array]::IndexOf($lines, '    "' + $Name + '": {')
+    $found = -1
+    for ($i = $start + 1; $start -ge 0 -and $i -lt $lines.Count -and $lines[$i] -notmatch '^    \},?$'; $i++) {
+        if ($lines[$i] -match '^      "auto_update": (true|false)(,?)$') { $found = $i; $comma = $Matches[2]; break }
+    }
+    if ($found -lt 0) { throw 'sources.json has an unexpected layout; change the policy on the server.' }
+    $lines[$found] = '      "auto_update": ' + $(if ($value) { 'true' } else { 'false' }) + $comma
+    $changed = $lines -join $newline
+    # Exactly this field of this skill changed, nothing else.
+    $after = $changed | ConvertFrom-Json
+    if ([bool]$after.skills.$Name.auto_update -ne $value) { throw 'Policy change failed; nothing changed.' }
+    $after.skills.$Name.auto_update = $entry.auto_update
+    if (($after | ConvertTo-Json -Depth 20 -Compress) -cne ($text | ConvertFrom-Json | ConvertTo-Json -Depth 20 -Compress)) {
+        throw 'Policy change would touch more than auto_update; nothing changed.'
+    }
+    [IO.File]::WriteAllText($path, $changed, (New-Object Text.UTF8Encoding($false)))
+    Invoke-Git -GitArgs @('add', '--', 'sources.json') | Out-Null
+    Invoke-ServiceGit -GitArgs @('commit', '-q', '-m', "Set $Name update policy to $Policy`n`nAgent-Skills-Client: 1") | Out-Null
+    Write-Output "${Name}: update policy $Policy; publishing"
+    Sync-Repository
+}
+
 function New-SkillLink {
     param([string]$Path, [string]$Target)
     # Junctions need no privileges on Windows; PowerShell on Linux uses symlinks.

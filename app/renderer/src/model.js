@@ -18,13 +18,14 @@ export const CELL_TEXT = {
 };
 
 export function buildMatrix(status) {
-  const rows = status.skills.map((skill) => ({ name: skill.name, inLibrary: true, global: skill.global }));
+  const rows = status.skills.map((skill) => ({ name: skill.name, inLibrary: true, global: skill.global,
+    update: skill.update || null }));
   const known = new Set(rows.map((row) => row.name));
   for (const project of status.projects) {
     for (const entry of project.skills) {
       if (!known.has(entry.name)) {
         known.add(entry.name);
-        rows.push({ name: entry.name, inLibrary: false, global: null });
+        rows.push({ name: entry.name, inLibrary: false, global: null, update: null });
       }
     }
   }
@@ -34,6 +35,12 @@ export function buildMatrix(status) {
 
 export function cellOf(project, name) {
   return project.skills.find((entry) => entry.name === name) || null;
+}
+
+// Update policy of an external skill; pending: switched here, not yet merged into the library.
+export function policyCaption(update) {
+  if (update.pending) return 'Ждёт принятия';
+  return update.policy === 'auto' ? 'Принимаются сами' : 'С подтверждением';
 }
 
 export function globalCaption(global) {

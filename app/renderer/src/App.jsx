@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CELL_TEXT, basename, buildMatrix, cellOf, conflictSkills, globalCaption, parent, problems } from './model.js';
+import { CELL_TEXT, basename, buildMatrix, cellOf, conflictSkills, globalCaption, parent, policyCaption, problems } from './model.js';
 import Resolver from './Resolver.jsx';
 import mark from '../../../assets/brand/skillarium-icon.svg';
 
@@ -49,6 +49,19 @@ function GlobalSwitch({ row, busy, onToggle }) {
         <span className="switch-knob" />
       </button>
       <span className="global-caption">{globalCaption(row.global)}</span>
+    </div>
+  );
+}
+
+function PolicySwitch({ row, busy, onToggle }) {
+  const auto = row.update.policy === 'auto';
+  return (
+    <div className="global-cell" title={`Источник: ${row.update.source}`}>
+      <button type="button" role="switch" aria-checked={auto} className="switch" disabled={busy}
+        aria-label={`Обновлять автоматически: ${row.name}`} onClick={onToggle}>
+        <span className="switch-knob" />
+      </button>
+      <span className="global-caption">{policyCaption(row.update)}</span>
     </div>
   );
 }
@@ -247,6 +260,13 @@ export default function App() {
     });
 
   const toggleGlobal = (row) => act(`global|${row.name}`, () => api.setGlobal(row.name, !row.global.enabled), (result) => report(result));
+  const togglePolicy = (row) => act(`policy|${row.name}`, () => api.setPolicy(row.name, row.update.policy !== 'auto'),
+    (result) => {
+      // The switch is committed here; only its publication waits for the next synchronization.
+      if (result.code !== 0 && result.messages.some((line) => /Publication pending/.test(line))) {
+        setNotice({ tone: 'warn', text: `Политика «${row.name}» изменена на этом компьютере и будет опубликована при следующей синхронизации.`, details: result.messages });
+      } else report(result);
+    });
   const register = () => act('register', () => api.register(),
     (result) => report(result, 'Проект добавлен, но часть скиллов из его списка не подключена. Подробности ниже.'));
   const resolve = (request) => {
@@ -328,6 +348,7 @@ export default function App() {
                 <tr>
                   <th scope="col" className="skill-col">Скилл</th>
                   <th scope="col" className="global-col">Глобально<span className="sub">в папках пользователя</span></th>
+                  <th scope="col" className="global-col">Обновлять автоматически<span className="sub">внешние скиллы</span></th>
                   {matrix.projects.map((project) => (
                     <th scope="col" key={project.path} className={`project-col${project.available ? '' : ' offline'}`}>
                       <span className="project-name" title={project.path}>{basename(project.path)}</span>
@@ -349,6 +370,10 @@ export default function App() {
                     </th>
                     <td className="global-col">
                       {row.global ? <GlobalSwitch row={row} busy={Boolean(busy)} onToggle={() => toggleGlobal(row)} /> : null}
+                    </td>
+                    <td className="global-col">
+                      {row.update ? <PolicySwitch row={row} busy={Boolean(busy)} onToggle={() => togglePolicy(row)} />
+                        : row.inLibrary ? <span className="global-caption">свой скилл</span> : null}
                     </td>
                     {matrix.projects.map((project) => {
                       const entry = cellOf(project, row.name);

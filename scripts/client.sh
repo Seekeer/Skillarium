@@ -376,6 +376,41 @@ sync_repository() {
     return 1
 }
 
+# The update policy of an external skill (auto: compatible updates are taken by the
+# server; confirm: each waits for a person). Any machine may switch it both ways: the
+# PR rule accepts a change of auto_update alone. One line of sources.json changes.
+set_update_policy() {
+    local name=$1 policy=$2 value file kind current changed
+    [[ "$policy" == auto || "$policy" == confirm ]] || { echo 'The policy is auto or confirm.' >&2; return 1; }
+    sync_repository || return 1
+    file="$repo/sources.json"
+    kind=$(jq -er --arg n "$name" '.skills[$n].source.kind // empty' "$file") || { echo "No skill $name in the library." >&2; return 1; }
+    [[ "$kind" != local ]] || { echo "$name has no external source and no update policy." >&2; return 1; }
+    value=false; [[ "$policy" == auto ]] && value=true
+    current=$(jq -r --arg n "$name" '.skills[$n].auto_update == true' "$file") || return 1
+    if [[ "$current" == "$value" ]]; then echo "$name: update policy already $policy"; return 0; fi
+    changed=$(awk -v start="    \"$name\": {" -v value="$value" '
+        $0 == start { inside = 1 }
+        inside && /^    },?\r?$/ { inside = 0 }
+        inside && !done && /^      "auto_update": (true|false),?\r?$/ { sub(/(true|false)/, value); done = 1 }
+        { print }
+        END { if (!done) exit 3 }' "$file") ||
+        { echo 'sources.json has an unexpected layout; change the policy on the server.' >&2; return 1; }
+    # Exactly this field of this skill changed, nothing else.
+    if ! jq -e --arg n "$name" --argjson v "$value" --slurpfile old "$file" \
+        '.skills[$n].auto_update == $v and (del(.skills[$n].auto_update) == ($old[0] | del(.skills[$n].auto_update)))' \
+        <<<"$changed" >/dev/null; then
+        echo 'Policy change would touch more than auto_update; nothing changed.' >&2; return 1
+    fi
+    printf '%s\n' "$changed" > "$file"
+    git -C "$repo" add -- sources.json || return 1
+    service_git -C "$repo" commit -q -m "Set $name update policy to $policy
+
+Agent-Skills-Client: 1" || return 1
+    echo "$name: update policy $policy; publishing"
+    sync_repository
+}
+
 link_version() {
     local name=$1 target="$repo/skills/$1" catalog link old temporary errors=0
     check_skill "$name" || return 1

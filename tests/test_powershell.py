@@ -108,6 +108,47 @@ class WindowsClientTests(unittest.TestCase):
         lib.powershell(self.client)
         self.assertIn('reviewed upstream', (lib.installed() / 'SKILL.md').read_text(encoding='utf-8'))
 
+    def test_update_policy_is_switched_from_the_client(self):
+        lib = self.lib
+        lib.powershell(self.client)
+        policy = lambda value, expected=0, name='first-skill': lib.powershell(
+            self.client, 'Policy', expected=expected, extra=['-Skill', name, '-Policy', value])
+        self.assertIn('policy confirm; publishing', policy('confirm'))
+        self.assertFalse(lib.registry()['skills']['first-skill']['auto_update'])
+        self.assertIn('already confirm', policy('confirm'))
+        lib.write_skill('first-skill', 'waits for a person')
+        lib.commit(lib.upstream, 'Upstream update')
+        lib.pull(lib.server)
+        lib.manage('maintain', '--apply-auto')
+        self.assertNotIn('waits for a person', lib.show('skills/first-skill/SKILL.md'))
+        # Back to auto: the pending update is taken by the next maintenance.
+        policy('auto')
+        self.assertTrue(lib.registry()['skills']['first-skill']['auto_update'])
+        lib.pull(lib.server)
+        lib.manage('maintain', '--apply-auto')
+        self.assertIn('waits for a person', lib.show('skills/first-skill/SKILL.md'))
+        self.assertIn('No skill missing-skill', policy('auto', expected=1, name='missing-skill'))
+        self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
+                                                    policy='auto', pending=False))
+        # A switch the hosting has not accepted yet is shown as pending.
+        lib.host.faults['auth'] = 10
+        policy('confirm', expected=1)
+        self.assertEqual(self.update_status()['policy'], 'confirm')
+        self.assertTrue(self.update_status()['pending'])
+
+    def update_status(self):
+        import json
+        import subprocess
+        from fixture import POWERSHELL
+        env = dict(self.lib.env, HOME=str(self.lib.home), USERPROFILE=str(self.lib.home),
+                   LOCALAPPDATA=str(self.lib.home / 'AppData' / 'Local'))
+        result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                                 str(self.client / 'projects.ps1'), 'status'], env=env, capture_output=True,
+                                text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = [item for item in result.stdout.splitlines() if item.startswith('{')][-1]
+        return next(row for row in json.loads(line)['skills'] if row['name'] == 'first-skill')['update']
+
     def test_conflict_resolution_with_merged_result(self):
         lib = self.lib
         lib.powershell(self.client)

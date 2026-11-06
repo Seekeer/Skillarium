@@ -8,12 +8,13 @@ split_library_arg "$@" || exit 2
 set -- ${rest[@]+"${rest[@]}"}
 mode=${1:---install}
 usage='Usage: bash install.sh [--library <folder>] [--install|--sync-only|--link-only|--uninstall|--status|--updates]
-       bash install.sh [--library <folder>] --review <skill> | --approve <skill> <commit> | --resolve <skill> <commit> keep-ours|take-upstream|merged'
+       bash install.sh [--library <folder>] --review <skill> | --approve <skill> <commit> | --resolve <skill> <commit> keep-ours|take-upstream|merged
+       bash install.sh [--library <folder>] --policy <skill> auto|confirm'
 expected=1
 case "$mode" in
     --install|--sync-only|--link-only|--uninstall|--status|--updates) ;;
     --review) expected=2 ;;
-    --approve) expected=3 ;;
+    --approve|--policy) expected=3 ;;
     --resolve) expected=4 ;;
     --help|-h) echo "$usage"; exit 0 ;;
     *) echo "Unknown mode: $mode" >&2; exit 2 ;;
@@ -54,6 +55,7 @@ case "$mode" in
     --review) review_update "$2" && exit 0; exit 1 ;;
     --approve) approve_update "$2" "$3" && exit 0; exit 1 ;;
     --resolve) resolve_update "$2" "$3" "$4" && exit 0; exit 1 ;;
+    --policy) set_update_policy "$2" "$3" && exit 0; exit 1 ;;
 esac
 result=0
 if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi

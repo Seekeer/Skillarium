@@ -57,14 +57,39 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(any('Windows' in e for e in self.evaluate()))
 
     def test_pins_require_the_assigned_server_author(self):
-        self.edit_registry(lambda entry: entry.update(auto_update=False))
+        self.edit_registry(lambda entry: entry.update(revision='0' * 40))
         self.commit_as('laptop')
         errors = self.evaluate()
         self.assertTrue(any('assigned server agent-skills/i3' in e for e in errors), errors)
         self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
-        self.edit_registry(lambda entry: entry.update(auto_update=False))
+        self.edit_registry(lambda entry: entry.update(revision='0' * 40))
         self.commit_as('i3')
         self.assertEqual(self.evaluate(), [])
+
+    def test_any_machine_switches_the_update_policy_and_nothing_else(self):
+        for value in (False, True):
+            self.edit_registry(lambda entry: entry.update(auto_update=value))
+            self.commit_as('laptop', 'Switch policy')
+            self.assertEqual(self.evaluate(), [], value)
+            self.lib.git(self.lib.remote, 'update-ref', 'refs/heads/main', self.lib.git(self.work, 'rev-parse', 'HEAD'),
+                         env={'AGENT_SKILLS_FAKE_HOST': '1'})
+            self.lib.git(self.work, 'fetch', '-q', 'origin')
+        # The policy alongside any other field of the entry is server state again.
+        self.edit_registry(lambda entry: entry.update(auto_update=False, revision='0' * 40))
+        self.commit_as('laptop', 'Policy and pin')
+        self.assertTrue(any('first-skill' in e and 'assigned server' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        self.edit_registry(lambda entry: entry['source'].update(ref='refs/heads/other'))
+        self.commit_as('laptop', 'Source')
+        self.assertTrue(any('assigned server' in e for e in self.evaluate()))
+        self.lib.git(self.work, 'reset', '-q', '--hard', 'origin/main')
+        # Adding or dropping a whole entry is not a policy switch either.
+        path = self.work / 'sources.json'
+        data = json.loads(path.read_text())
+        data['skills']['copy-skill'] = dict(data['skills']['first-skill'], auto_update=False)
+        path.write_text(json.dumps(data, indent=2) + '\n')
+        self.commit_as('laptop', 'New entry')
+        self.assertTrue(any('copy-skill' in e for e in self.evaluate()))
 
     def pin(self, version, sha='a' * 128, **extra):
         path = self.work / 'agent-skills.json'

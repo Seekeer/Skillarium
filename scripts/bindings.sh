@@ -410,6 +410,16 @@ cmd_status() {
         projects+=("$(printf '%s\n' "${skills[@]}" | jq -cs --arg p "$project" --argjson a "$available" --argjson e "$error" \
             'map(select(. != null)) | {path: $p, available: $a, error: $e, skills: .}')")
     done < <(jq -r '.projects | keys[]' <<<"$state")
+    # External source and update policy; pending: a local switch not yet merged into main.
+    local merged_skills updates
+    merged_skills=$(git -C "$repo" show "refs/remotes/origin/$main_branch:sources.json" 2>/dev/null | jq -c '.skills' 2>/dev/null) ||
+        merged_skills=''
+    [[ -n "$merged_skills" ]] || merged_skills='{}'
+    updates=$(jq -c --argjson merged "$merged_skills" '.skills | with_entries(select(.value.source.kind != "local")
+        | .value = {source: (.value.source.url + (if (.value.source.path // ".") == "." then "" else " " + .value.source.path end)),
+                    policy: (if .value.auto_update then "auto" else "confirm" end),
+                    pending: (($merged[.key].auto_update // .value.auto_update) != .value.auto_update)})' \
+        "$repo/sources.json") || return 1
     while IFS= read -r name; do
         [[ -n "$name" ]] || continue
         links='{}'
@@ -418,7 +428,8 @@ cmd_status() {
                 '.[$l] = $s' <<<"$links")
         done
         rows+=("$(jq -cn --arg n "$name" --argjson g "$(global_json "$name")" --argjson l "$links" \
-            '{name: $n, global: ($g + {links: $l}), projects: []}')")
+            --argjson u "$(jq -c --arg n "$name" '.[$n] // null' <<<"$updates")" \
+            '{name: $n, global: ($g + {links: $l}), projects: [], update: $u}')")
     done <<<"$names"
     local here remote
     here=$(library_format) || return 1

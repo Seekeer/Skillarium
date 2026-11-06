@@ -105,6 +105,7 @@ ipcMain.handle('unbind', (_event, project, name, choice) => {
   return choice ? run('unbind', text(project), skill(name), choice) : run('unbind', text(project), skill(name));
 });
 ipcMain.handle('global', (_event, name, enabled) => run('global', skill(name), enabled ? 'on' : 'off'));
+ipcMain.handle('policy', (_event, name, auto) => run('policy', skill(name), auto ? 'auto' : 'confirm'));
 ipcMain.handle('conflicts', () => run('conflicts'));
 ipcMain.handle('resolve', async (_event, request) => {
   const id = (value) => value === null || (typeof value === 'string' && OBJECT_ID.test(value));

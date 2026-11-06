@@ -5,6 +5,7 @@
 #        projects.ps1 unbind <folder> <skill> [global|library]
 #        projects.ps1 global <skill> on|off
 #        projects.ps1 conflicts | resolve <request.json>
+#        projects.ps1 policy <skill> auto|confirm
 # Exit codes: 3 the last binding needs a global-access choice (JSON on stdout);
 #             4 the binding is saved but not applied (see status);
 #             5 the synchronization conflict changed; nothing was merged.
@@ -17,11 +18,11 @@ if ($rest.Count -ge 2 -and @('-Library', '--library') -contains [string]$rest[0]
     $library = [string]$rest[1]
     $rest = @($rest | Select-Object -Skip 2)
 }
-$commands = @{status = @(0); register = @(1); unregister = @(1); bind = @(2); unbind = @(2, 3); global = @(2); conflicts = @(0); resolve = @(1)}
+$commands = @{status = @(0); register = @(1); unregister = @(1); bind = @(2); unbind = @(2, 3); global = @(2); conflicts = @(0); resolve = @(1); policy = @(2)}
 $command = [string]@($rest)[0]
 $arguments = @($rest | Select-Object -Skip 1)
 if (-not $command -or -not $commands.ContainsKey($command) -or $commands[$command] -notcontains $arguments.Count) {
-    [Console]::Error.WriteLine('Usage: projects.ps1 [-Library <folder>] status|register|unregister|bind|unbind|global|conflicts|resolve ...; see the header of projects.ps1.')
+    [Console]::Error.WriteLine('Usage: projects.ps1 [-Library <folder>] status|register|unregister|bind|unbind|global|conflicts|resolve|policy ...; see the header of projects.ps1.')
     exit 2
 }
 
@@ -67,6 +68,11 @@ try {
         'global' { Invoke-Global -Name $arguments[0] -Value $arguments[1] }
         'conflicts' { Invoke-Conflicts }
         'resolve' { Invoke-Resolve -RequestPath $arguments[0] }
+        'policy' {
+            if (@('auto', 'confirm') -cnotcontains $arguments[1]) { throw 'The policy is auto or confirm.' }
+            Set-UpdatePolicy -Name $arguments[0] -Policy $arguments[1]
+            0
+        }
     })
     $result = $outputs[-1]
 } catch {

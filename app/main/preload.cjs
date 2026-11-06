@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('skills', {
   bind: (project, skill) => ipcRenderer.invoke('bind', project, skill),
   unbind: (project, skill, choice) => ipcRenderer.invoke('unbind', project, skill, choice),
   setGlobal: (skill, enabled) => ipcRenderer.invoke('global', skill, enabled),
+  setPolicy: (skill, auto) => ipcRenderer.invoke('policy', skill, auto),
   conflicts: () => ipcRenderer.invoke('conflicts'),
   resolve: (request) => ipcRenderer.invoke('resolve', request),
   defaultFolder: () => ipcRenderer.invoke('default-folder'),

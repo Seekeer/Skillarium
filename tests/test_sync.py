@@ -217,6 +217,41 @@ class LinuxClientTests(unittest.TestCase):
             self.assertIn('Another sync', self.lib.sync(self.client))
             self.assertFalse(self.lib.installed().exists())
 
+    def test_update_policy_is_switched_from_the_client(self):
+        lib = self.lib
+        lib.sync(self.client)
+        self.assertIn('policy confirm; publishing', lib.sync(self.client, '--policy', args=['first-skill', 'confirm']))
+        self.assertFalse(lib.registry()['skills']['first-skill']['auto_update'])
+        self.assertIn('already confirm', lib.sync(self.client, '--policy', args=['first-skill', 'confirm']))
+        lib.write_skill('first-skill', 'waits for a person')
+        lib.commit(lib.upstream, 'Upstream update')
+        lib.pull(lib.server)
+        lib.manage('maintain', '--apply-auto')
+        self.assertNotIn('waits for a person', lib.show('skills/first-skill/SKILL.md'))
+        # Back to auto: the pending update is taken by the next maintenance.
+        lib.sync(self.client, '--policy', args=['first-skill', 'auto'])
+        self.assertTrue(lib.registry()['skills']['first-skill']['auto_update'])
+        lib.pull(lib.server)
+        lib.manage('maintain', '--apply-auto')
+        self.assertIn('waits for a person', lib.show('skills/first-skill/SKILL.md'))
+        self.assertIn('No skill missing-skill', lib.sync(self.client, '--policy', args=['missing-skill', 'auto'],
+                                                          expected=1))
+        self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
+                                                    policy='auto', pending=False))
+        # A switch the hosting has not accepted yet is shown as pending.
+        lib.host.faults['auth'] = 10
+        lib.sync(self.client, '--policy', args=['first-skill', 'confirm'], expected=1)
+        self.assertEqual(self.update_status()['policy'], 'confirm')
+        self.assertTrue(self.update_status()['pending'])
+
+    def update_status(self):
+        env = dict(self.lib.env, HOME=str(self.lib.home), XDG_CACHE_HOME=str(self.lib.home / '.cache'))
+        result = subprocess.run(['bash', str(self.client / 'projects.sh'), 'status'], env=env, capture_output=True,
+                                text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = [item for item in result.stdout.splitlines() if item.startswith('{')][-1]
+        return next(row for row in json.loads(line)['skills'] if row['name'] == 'first-skill')['update']
+
     def test_confirm_update_review_and_approval_on_client(self):
         lib = self.lib
         lib.manage('set-policy', 'first-skill', 'confirm')

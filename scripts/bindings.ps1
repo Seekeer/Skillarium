@@ -519,8 +519,21 @@ function Invoke-Status {
         }
         $projects += [ordered]@{path = $project; available = $available; error = $errorValue; skills = $skills}
     }
+    # External source and update policy; pending: a local switch not yet merged into main.
+    $localSkills = (Get-Content -LiteralPath (Join-Path $repo 'sources.json') -Raw -Encoding UTF8 | ConvertFrom-Json).skills
+    $remoteSkills = $null
+    try { $remoteSkills = ((Invoke-Git -GitArgs @('show', "refs/remotes/origin/${mainBranch}:sources.json")) -join "`n" | ConvertFrom-Json).skills } catch { }
     $rows = @()
     foreach ($name in Get-LibraryNames) {
+        $update = $null
+        $entry = $localSkills.$name
+        if ($entry -and $entry.source.kind -ne 'local') {
+            $where = [string]$entry.source.url
+            if ($entry.source.path -and $entry.source.path -ne '.') { $where += ' ' + $entry.source.path }
+            $merged = if ($remoteSkills -and $remoteSkills.$name) { [bool]$remoteSkills.$name.auto_update } else { [bool]$entry.auto_update }
+            $update = [ordered]@{source = $where; policy = $(if ($entry.auto_update) { 'auto' } else { 'confirm' })
+                pending = ($merged -ne [bool]$entry.auto_update)}
+        }
         $choice = Get-GlobalChoice $name
         $links = [ordered]@{}
         foreach ($agent in $agentFolders) {
@@ -528,7 +541,7 @@ function Invoke-Status {
             $links[$link] = Get-LinkState $link (Get-SkillTarget $name)
         }
         $bound = @($projects | Where-Object { @($_.skills | ForEach-Object { $_.name }) -ccontains $name } | ForEach-Object { $_.path })
-        $rows += [ordered]@{name = $name; projects = $bound
+        $rows += [ordered]@{name = $name; projects = $bound; update = $update
             global = [ordered]@{enabled = $choice.enabled; manual = $choice.manual; pending = $choice.pending; links = $links}}
     }
     $format = [Math]::Max((Get-LibraryFormat), (Get-LibraryFormat "refs/remotes/origin/$mainBranch"))

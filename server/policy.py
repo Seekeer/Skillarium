@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Acceptance rule for pull requests into the protected main branch.
 
-Skill content may change from any connected machine after technical checks.
-Pins, policies, upstream bases and other server state may only reach main in
+Skill content may change from any connected machine after technical checks, and
+so may the update policy (auto_update) of an existing external skill. Pins,
+upstream bases and other server state may only reach main in
 the form produced by a commit authored by the server assigned in the
 *current* main branch; changes of the assignment itself are a separate
 administrative operation. The rule inspects the actual changes, not labels.
@@ -44,6 +45,22 @@ def registry_units(repo, revision):
     for name, entry in (registry.get('skills') or {}).items():
         units[('registry', 'skills/' + name)] = json.dumps(entry, sort_keys=True)
     return units
+
+
+def policy_only(before, after):
+    """An existing external skill whose entry changed in auto_update alone.
+
+    The update policy only decides whether an update waits for a person, so any
+    machine may switch it, both ways; the rest of the entry stays server state.
+    """
+    if before is None or after is None:
+        return False
+    old, new = json.loads(before), json.loads(after)
+    if not isinstance(old, dict) or not isinstance(new, dict) or (old.get('source') or {}).get('kind') == 'local':
+        return False
+    rest = lambda entry: {key: value for key, value in entry.items() if key != 'auto_update'}
+    return (rest(old) == rest(new) and isinstance(new.get('auto_update'), bool)
+            and old.get('auto_update') != new.get('auto_update'))
 
 
 def unit_value(repo, revision, unit, cache):
@@ -195,7 +212,13 @@ def evaluate(repo, base, head):
                 continue
             cache = {}
             before, after = registry_units(repo, base) if blob(repo, base, REGISTRY) else {}, registry_units(repo, head)
-            units.update(unit for unit in set(before) | set(after) if before.get(unit) != after.get(unit))
+            for unit in set(before) | set(after):
+                if before.get(unit) == after.get(unit):
+                    continue
+                if policy_only(before.get(unit), after.get(unit)):
+                    notes.append(f'{unit[1]}: update policy changed')
+                else:
+                    units.add(unit)
         elif parts[0] == 'upstream' and len(parts) > 2:
             units.add(('upstream', parts[1]))
         elif parts[0] == 'upstream':

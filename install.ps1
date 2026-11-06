@@ -1,10 +1,11 @@
 # Windows PowerShell 5.1+; installs junctions and a per-user hourly task.
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Sync', 'Link', 'Uninstall', 'Status', 'Updates', 'Review', 'Approve', 'Resolve')][string]$Mode = 'Install',
+    [ValidateSet('Install', 'Sync', 'Link', 'Uninstall', 'Status', 'Updates', 'Review', 'Approve', 'Resolve', 'Policy')][string]$Mode = 'Install',
     [string]$Skill,
     [string]$Commit,
     [ValidateSet('keep-ours', 'take-upstream', 'merged')][string]$Strategy,
+    [ValidateSet('auto', 'confirm')][string]$Policy,
     [string]$Library
 )
 $ErrorActionPreference = 'Stop'
@@ -52,9 +53,10 @@ try {
     $env:GCM_INTERACTIVE = 'Never'
     if (-not $env:GIT_SSH_COMMAND) { $env:GIT_SSH_COMMAND = 'ssh -oBatchMode=yes -oConnectTimeout=15' }
     . (Join-Path $engine 'scripts\client.ps1')
-    if ($Mode -in @('Review', 'Approve', 'Resolve') -and -not $Skill) { throw "-Skill is required for -Mode $Mode." }
+    if ($Mode -in @('Review', 'Approve', 'Resolve', 'Policy') -and -not $Skill) { throw "-Skill is required for -Mode $Mode." }
     if ($Mode -in @('Approve', 'Resolve') -and -not $Commit) { throw "-Commit is required for -Mode $Mode." }
     if ($Mode -eq 'Resolve' -and -not $Strategy) { throw '-Strategy is required for -Mode Resolve.' }
+    if ($Mode -eq 'Policy' -and -not $Policy) { throw '-Policy auto|confirm is required for -Mode Policy.' }
     switch ($Mode) {
         'Status' { Show-Status; return }
         'Updates' {
@@ -65,6 +67,7 @@ try {
         'Review' { Show-Review -Name $Skill; return }
         'Approve' { Approve-Update -Name $Skill -Commit $Commit; return }
         'Resolve' { Resolve-Update -Name $Skill -Commit $Commit -Strategy $Strategy; return }
+        'Policy' { Set-UpdatePolicy -Name $Skill -Policy $Policy; return }
     }
     . (Join-Path $engine 'scripts\bindings.ps1')
     if ($Mode -ne 'Link') {
