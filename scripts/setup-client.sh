@@ -60,7 +60,12 @@ gitea() { # gitea <resource>: JSON of an authenticated GET; fails on any error s
     printf 'header = "Authorization: token %s"\n' "$token" |
         curl -fsS --retry 2 --config - -H 'Accept: application/json' "$api$1"
 }
-user=$(gitea /user) || die 'Gitea rejected the token'
+user=$(gitea /user) || {
+    # curl -f exits 22 on an HTTP error status; anything else means no answer at all.
+    status=$?
+    [[ $status -eq 22 ]] && die 'Gitea rejected the token'
+    die "Unable to connect to Gitea at $api (curl exit $status)"
+}
 login=$(jq -r '.login' <<<"$user")
 repository=$(gitea "/repos/$owner/$name") || die "cannot read $owner/$name with this token"
 [[ $(jq -r '.permissions.push // false' <<<"$repository") == true ]] || die "the token of $login cannot write to $owner/$name"

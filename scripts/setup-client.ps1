@@ -74,7 +74,13 @@ function Save-Credential {
         Write-Output "Git credential helper: $helper"
     }
     $request = "protocol=$($Target.Scheme)`nhost=$($Target.Host)`nusername=$Login`npassword=$Token`n`n"
-    $request | & git credential approve
+    # A console input encoding with a BOM (Windows "UTF-8 for worldwide language support")
+    # prefixes piped input with it, and Git then sees no protocol field.
+    $inputEncoding = [Console]::InputEncoding
+    try {
+        [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+        $request | & git credential approve
+    } finally { [Console]::InputEncoding = $inputEncoding }
     if ($LASTEXITCODE -ne 0) { throw 'The Git credential helper did not store the token.' }
 }
 

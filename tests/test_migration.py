@@ -145,6 +145,8 @@ class ServerSwitchTests(unittest.TestCase):
         (shims / 'systemctl').chmod(0o755)
         self.library = self.root / 'agent skills'
         shutil.copytree(ROOT / 'server', self.library / 'server')
+        (self.library / 'scripts').mkdir()
+        shutil.copy2(ROOT / 'scripts' / 'locate.sh', self.library / 'scripts' / 'locate.sh')
         subprocess.run(['git', 'init', '-q', str(self.library)], check=True)
         self.env = dict(os.environ, HOME=str(self.home), XDG_CONFIG_HOME=str(self.home / '.config'),
                         PATH=str(shims) + os.pathsep + os.environ['PATH'], GIT_CONFIG_GLOBAL=os.devnull)
