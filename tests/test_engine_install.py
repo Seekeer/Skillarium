@@ -61,6 +61,25 @@ class EngineInstall:
         self.assertIn('Skillarium: 0.2.0 (stable)', status)
         self.assertIn('format 1, engine supports 1; mode: normal', status)
 
+    def test_update_commands_run_the_installed_engine(self):
+        self.releases.publish('0.1.0')
+        self.assertIn('not installed', self.run_skillarium('updates', expected=1))
+        self.run_skillarium('install')
+        library, remote = self.root / 'library', self.root / 'library.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(remote)], check=True)
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(library)], check=True)
+        shutil.copy2(ROOT / 'templates' / 'library' / 'agent-skills.json', library / 'agent-skills.json')
+        (library / 'sources.json').write_text('{"version": 2, "skills": {}}\n', encoding='utf-8')
+        for command in (['add', '-A'], ['-c', 'user.name=Test', '-c', 'user.email=test@localhost', 'commit', '-q', '-m', 'Library'],
+                        ['remote', 'add', 'origin', str(remote)], ['push', '-q', 'origin', 'main']):
+            subprocess.run(['git', '-C', str(library), *command], check=True)
+        env = {'SKILLARIUM_LIBRARY': str(library)}
+        self.assertIn('No pending external updates', self.run_skillarium('updates', env=env))
+        self.assertIn('no-such-skill', self.run_skillarium('review', 'no-such-skill', env=env, expected=1))
+        wrong = self.run_skillarium('approve', 'only-a-name', env=env, expected=None)
+        self.assertIn('approve', wrong.lower())
+        self.assertNotIn('only-a-name', wrong)
+
     def test_broken_checksum_and_interrupted_download_change_nothing(self):
         self.releases.publish('0.1.0')
         self.run_skillarium('install')

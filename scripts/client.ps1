@@ -624,8 +624,8 @@ function Show-Review {
         }
     }
     Write-Output "Review copy outside the installation: $(Join-Path $worktree "skills\$Name")"
-    if ($status -eq 'confirm') { Write-Output "Accept exactly this result: install.ps1 -Mode Approve -Skill $Name -Commit $head" }
-    else { Write-Output "Resolve: install.ps1 -Mode Resolve -Skill $Name -Commit $head -Strategy keep-ours|take-upstream|merged" }
+    if ($status -eq 'confirm') { Write-Output "Accept exactly this result: skillarium approve $Name $head" }
+    else { Write-Output "Resolve: skillarium resolve $Name $head keep-ours|take-upstream|merged" }
 }
 
 function Get-Proposal {

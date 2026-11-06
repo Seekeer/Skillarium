@@ -31,6 +31,11 @@ Usage: skillarium <command>
                                  hourly self-update timer (machines without the app)
   server ...                     set up the library server (see: skillarium server --help)
   client ...                     connect this machine to a library (see: skillarium client --help)
+  updates                        pending updates of external skills and conflicts
+  review <skill>                 what an update changes (diff, versions, conflict copy)
+  approve <skill> <commit>       accept exactly the reviewed result
+  resolve <skill> <commit> keep-ours|take-upstream|merged
+                                 settle a conflict
   add <folder|link> [--policy auto|confirm]
                                  add a skill: an own folder, or a link to a repository,
                                  a skill folder or its SKILL.md (see: skillarium add --help)
@@ -442,6 +447,9 @@ case "$command" in
     disable-updates) cmd_disable_updates ;;
     server) run_role server/setup.sh "$@" ;;
     client) run_role scripts/setup-client.sh "$@" ;;
+    updates|review|approve|resolve)
+        [[ -f "$home/current/VERSION" ]] || die 'Skillarium is not installed: skillarium install'
+        exec bash "$home/current/install.sh" "--$command" "$@" ;;
     add)
         command -v python3 >/dev/null || die 'skillarium add needs Python 3'
         if [[ ! -f "$home/current/VERSION" ]]; then

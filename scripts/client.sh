@@ -551,10 +551,10 @@ review_update() {
     fi
     echo "Review copy outside the installation: $worktree/skills/$name"
     if [[ "$status" == confirm ]]; then
-        echo "Accept exactly this result: bash install.sh --approve $name $head"
+        echo "Accept exactly this result: skillarium approve $name $head"
     else
         echo "Conflict markers (if any) are in the review copy. Resolve with one of:"
-        echo "  bash install.sh --resolve $name $head keep-ours|take-upstream|merged"
+        echo "  skillarium resolve $name $head keep-ours|take-upstream|merged"
     fi
 }
 

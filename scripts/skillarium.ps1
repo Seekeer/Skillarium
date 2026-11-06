@@ -26,6 +26,11 @@ Usage: skillarium <command>
   enable-updates | disable-updates
                                  hourly self-update task (machines without the app)
   client ...                     connect this machine to a library (skillarium client -Help)
+  updates                        pending updates of external skills and conflicts
+  review <skill>                 what an update changes (diff, versions, conflict copy)
+  approve <skill> <commit>       accept exactly the reviewed result
+  resolve <skill> <commit> keep-ours|take-upstream|merged
+                                 settle a conflict
   add <folder|link> [--policy auto|confirm]
                                  add a skill: an own folder, or a link to a repository,
                                  a skill folder or its SKILL.md (skillarium add --help)
@@ -386,6 +391,23 @@ try {
             if (-not (Get-CurrentVersion)) { Invoke-Install @() }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
+            $code = $LASTEXITCODE
+        }
+        { $_ -in @('updates', 'review', 'approve', 'resolve') } {
+            # The library's update review lives in the installer; the library comes from the configuration.
+            if (-not (Get-CurrentVersion)) { throw 'Skillarium is not installed: skillarium install.' }
+            $positional = @{ updates = @(); review = @('Skill'); approve = @('Skill', 'Commit'); resolve = @('Skill', 'Commit', 'Strategy') }[$command]
+            if ($rest.Count -ne $positional.Count) {
+                throw "Usage: skillarium $command$(-join ($positional | ForEach-Object { ' <' + $_.ToLower() + '>' }))"
+            }
+            if ($command -eq 'resolve' -and $rest[2] -notin @('keep-ours', 'take-upstream', 'merged')) {
+                throw 'The strategy is keep-ours, take-upstream or merged.'
+            }
+            $installerArgs = @('-Mode', ($command.Substring(0, 1).ToUpper() + $command.Substring(1)))
+            for ($i = 0; $i -lt $positional.Count; $i++) { $installerArgs += @(('-' + $positional[$i]), [string]$rest[$i]) }
+            if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+                -File (Join-Path $root 'current\install.ps1') @installerArgs
             $code = $LASTEXITCODE
         }
         'add' {
