@@ -343,6 +343,56 @@ test('a library of a newer format is shown as read-only with an update check', a
   await expect(banner.getByRole('button', { name: 'Проверить обновление' })).toHaveCount(0);
 });
 
+test('settings show versions and follow the app update to a restart', async () => {
+  session = await launch(fixture);
+  const { app, page } = session;
+  const opener = page.getByRole('button', { name: 'Настройки' });
+  const dialog = page.getByRole('dialog', { name: 'Настройки' });
+  // Keyboard: focus starts inside, Tab cannot leave the dialog, Escape returns to the opener.
+  await opener.click();
+  await expect(dialog.getByRole('button', { name: 'Закрыть' })).toBeFocused();
+  const focusInside = () => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')));
+  for (const key of ['Tab', 'Tab', 'Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab']) {
+    await page.keyboard.press(key);
+    expect(await focusInside()).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await opener.click();
+  const settings = dialog.getByTestId('settings');
+  await expect(settings).toContainText(/Skillarium \d+\.\d+\.\d+ \(сборка для разработки\)/);
+  await expect(settings).toContainText('из папки репозитория');
+  await expect(settings).toContainText('стабильный');
+  await expect(settings).toContainText(fixture.library);
+  const summary = dialog.getByTestId('update-summary');
+  // A development run has no updater: it says so and offers no check.
+  await expect(summary).toContainText('сборка для разработки');
+  const check = dialog.getByRole('button', { name: 'Проверить обновления' });
+  await expect(check).toBeDisabled();
+  // The packaged updater's events reach the window through the same channel.
+  const push = (state) => app.evaluate(({ BrowserWindow }, value) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('update', value);
+  }, state);
+  await push({ state: 'current', version: '0.1.2', checkedAt: '2026-11-07T10:15:00.000Z' });
+  await expect(summary).toHaveText('Установлена последняя версия.');
+  await expect(dialog).toContainText('Последняя проверка:');
+  await expect(check).toBeEnabled();
+  await push({ state: 'error', message: 'net::ERR_INTERNET_DISCONNECTED' });
+  await expect(summary).toContainText('Проверить обновления не удалось: net::ERR_INTERNET_DISCONNECTED');
+  await expect(check).toBeEnabled();
+  await push({ state: 'downloading', version: '0.2.0', percent: 42 });
+  await expect(summary).toHaveText('Загружаю версию 0.2.0 — 42%…');
+  await expect(check).toBeDisabled();
+  await push({ state: 'ready', version: '0.2.0' });
+  await expect(summary).toContainText('Версия 0.2.0 загружена');
+  await expect(dialog.getByRole('button', { name: 'Перезапустить и обновить' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /Настройки/ }).getByLabel('есть обновление')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Закрыть' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('update-ready')).toContainText('0.2.0');
+});
+
 test('first run offers to connect a library and reports a failed connection', async () => {
   const env = { ...fixture.env };
   delete env.AGENT_SKILLS_LIBRARY;

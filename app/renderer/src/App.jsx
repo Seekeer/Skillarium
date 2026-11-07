@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CELL_TEXT, basename, buildMatrix, cellOf, conflictSkills, globalCaption, parent, policyCaption, problems } from './model.js';
+import {
+  CELL_TEXT, basename, buildMatrix, cellOf, checkedText, conflictSkills, globalCaption, parent, policyCaption, problems,
+  updateSummary,
+} from './model.js';
 import Resolver from './Resolver.jsx';
 import mark from '../../../assets/brand/skillarium-icon.svg';
 
@@ -22,11 +25,35 @@ function explainConnect(messages) {
   return 'Подключить библиотеку не удалось.';
 }
 
+const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const focusable = (root) => [...(root?.querySelectorAll(FOCUSABLE) || [])].filter((item) => !item.disabled);
+
 function Modal({ title, children, onCancel }) {
   const box = useRef(null);
+  // Focus starts on an enabled control of the dialog and returns where it was on close.
   useEffect(() => {
-    box.current?.querySelector('[data-autofocus]')?.focus();
-    const onKey = (event) => { if (event.key === 'Escape') onCancel(); };
+    const previous = document.activeElement;
+    (box.current?.querySelector('[data-autofocus]:not(:disabled)') || focusable(box.current)[0])?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === 'Escape') { onCancel(); return; }
+      if (event.key !== 'Tab') return;
+      // Tab stays inside the dialog: the page behind it is not reachable.
+      const items = focusable(box.current);
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const inside = box.current.contains(document.activeElement);
+      if (!inside || (event.shiftKey && document.activeElement === first)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel]);
@@ -185,6 +212,55 @@ function UpdateBanner({ update }) {
   );
 }
 
+const CHANNEL_TEXT = { stable: 'стабильный', beta: 'предварительные выпуски (beta)' };
+
+function Settings({ library, update, onUpdate, onChooseLibrary, onClose }) {
+  const [about, setAbout] = useState(null);
+  useEffect(() => { api.about().then(setAbout); }, []);
+  const state = update?.state;
+  const canCheck = !['development', 'disabled', 'checking', 'downloading', 'ready'].includes(state);
+  const engine = about?.engine;
+  return (
+    <Modal title="Настройки" onCancel={onClose}>
+      <dl className="settings" data-testid="settings">
+        <dt>Приложение</dt>
+        <dd>{about ? `Skillarium ${about.app}${about.packaged ? '' : ' (сборка для разработки)'}` : '…'}</dd>
+        <dt>Движок</dt>
+        <dd>
+          {engine ? (engine.version ? `версия ${engine.version}` : 'из папки репозитория') : '…'}
+          {engine && <code title={engine.path}>{engine.path}</code>}
+        </dd>
+        <dt>Канал обновлений</dt>
+        <dd>{about ? CHANNEL_TEXT[about.channel] : '…'}</dd>
+        <dt>Библиотека</dt>
+        <dd>
+          <code title={library.path}>{library.path}</code>
+          <button type="button" className="quiet small" onClick={onChooseLibrary}>Сменить</button>
+        </dd>
+      </dl>
+      <section className="settings-update" aria-labelledby="settings-update-title">
+        <h3 id="settings-update-title">Обновление</h3>
+        <p role="status" data-testid="update-summary">{updateSummary(update)}</p>
+        {checkedText(update?.checkedAt) && <p className="sub">{checkedText(update.checkedAt)}</p>}
+        <p className="sub">Приложение проверяет обновления само раз в несколько часов и обновляет вместе с собой движок.</p>
+      </section>
+      <div className="modal-actions">
+        {/* Focus starts on the update action; on Close while there is nothing to do. */}
+        <button type="button" className="quiet" data-autofocus={(state !== 'ready' && !canCheck) || undefined}
+          onClick={onClose}>Закрыть</button>
+        {state === 'ready' ? (
+          <button type="button" className="primary" data-autofocus onClick={() => api.installUpdate()}>Перезапустить и обновить</button>
+        ) : (
+          <button type="button" className="primary" data-autofocus disabled={!canCheck}
+            onClick={() => api.checkUpdate().then(onUpdate)}>
+            {state === 'checking' ? 'Проверяю…' : 'Проверить обновления'}
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 export default function App() {
   const [library, setLibrary] = useState(null);
   const [status, setStatus] = useState(null);
@@ -195,6 +271,9 @@ export default function App() {
   const [sync, setSync] = useState(null);
   const [resolving, setResolving] = useState(null);
   const [update, setUpdate] = useState(null);
+  const [settings, setSettings] = useState(false);
+  // Stable, so update events re-rendering the open window do not move the focus.
+  const closeSettings = useCallback(() => setSettings(false), []);
 
   useEffect(() => {
     api.updateState().then(setUpdate);
@@ -311,6 +390,9 @@ export default function App() {
           {busy && <span className="working" role="status">Применяю…</span>}
           <button type="button" className="quiet" onClick={() => act('refresh', async () => null, () => {})} disabled={Boolean(busy)}>Обновить</button>
           <button type="button" className="primary" onClick={register} disabled={Boolean(busy)}>Добавить проект</button>
+          <button type="button" className="quiet" onClick={() => setSettings(true)}>
+            Настройки{update?.state === 'ready' && <span className="dot" aria-label="есть обновление" />}
+          </button>
         </div>
       </header>
 
@@ -448,6 +530,11 @@ export default function App() {
       )}
 
       {resolving && <Resolver sync={resolving} onCancel={() => setResolving(null)} onApply={resolve} />}
+
+      {settings && (
+        <Settings library={library} update={update} onUpdate={setUpdate} onClose={closeSettings}
+          onChooseLibrary={() => { setSettings(false); chooseLibrary(); }} />
+      )}
 
       {removingProject && (
         <Modal title={`Убрать проект «${basename(removingProject.path)}»?`} onCancel={() => setRemoving(null)}>
