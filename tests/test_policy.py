@@ -91,6 +91,42 @@ class PolicyTests(unittest.TestCase):
         self.commit_as('laptop', 'New entry')
         self.assertTrue(any('copy-skill' in e for e in self.evaluate()))
 
+    def test_policy_exception_covers_only_the_policy_of_external_skill_entries(self):
+        entry = dict(source=dict(kind='git', url='https://example.org/r.git', path='.', ref='refs/heads/main'),
+                     auto_update=True, revision='a' * 40, customization=dict(flag=True, count=0))
+        dump = lambda value: json.dumps(value, sort_keys=True)
+        switched = dict(entry, auto_update=False)
+        self.assertTrue(policy.policy_only(('skill-entry', 'x'), dump(entry), dump(switched)))
+        # Not a skill entry: top-level registry values stay server state.
+        self.assertFalse(policy.policy_only(('registry', 'metadata'), dump(entry), dump(switched)))
+        self.assertFalse(policy.policy_only(('registry', 'skills/x'), dump(entry), dump(switched)))
+        # Booleans and numbers elsewhere in the entry are not interchangeable.
+        for smuggled in (dict(flag=1, count=0), dict(flag=True, count=False)):
+            with self.subTest(smuggled=smuggled):
+                self.assertFalse(policy.policy_only(('skill-entry', 'x'), dump(entry),
+                                                    dump(dict(switched, customization=smuggled))))
+        # The policy itself must stay a boolean, and own skills have none.
+        self.assertFalse(policy.policy_only(('skill-entry', 'x'), dump(entry), dump(dict(entry, auto_update=0))))
+        own = dict(source=dict(kind='local', path='skills/x'), auto_update=False)
+        self.assertFalse(policy.policy_only(('skill-entry', 'x'), dump(own), dump(dict(own, auto_update=True))))
+
+    def test_top_level_key_spelled_like_a_skill_entry_stays_server_state(self):
+        def write(value):
+            path = self.work / 'sources.json'
+            data = json.loads(path.read_text())
+            data['skills/metadata'] = dict(data['skills']['first-skill'], auto_update=value)
+            path.write_text(json.dumps(data, indent=2) + '\n')
+        write(True)
+        self.commit_as('i3', 'Server state')
+        self.assertEqual(self.evaluate(), [])
+        self.lib.git(self.lib.remote, 'update-ref', 'refs/heads/main', self.lib.git(self.work, 'rev-parse', 'HEAD'),
+                     env={'AGENT_SKILLS_FAKE_HOST': '1'})
+        self.lib.git(self.work, 'fetch', '-q', 'origin')
+        write(False)
+        self.commit_as('laptop', 'Not a policy switch')
+        errors = self.evaluate()
+        self.assertTrue(any(e.startswith('skills/metadata:') and 'assigned server' in e for e in errors), errors)
+
     def pin(self, version, sha='a' * 128, **extra):
         path = self.work / 'agent-skills.json'
         config = json.loads(path.read_text())

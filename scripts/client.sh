@@ -383,14 +383,21 @@ set_update_policy() {
     local name=$1 policy=$2 value file kind current changed
     [[ "$policy" == auto || "$policy" == confirm ]] || { echo 'The policy is auto or confirm.' >&2; return 1; }
     sync_repository || return 1
+    # Checked here too: without origin the synchronization above returns before its own checks.
+    assert_writable || return 1
+    [[ -z $(git -C "$repo" diff --cached --name-only) ]] || { echo 'Staged changes preserved; nothing changed.' >&2; return 1; }
+    [[ -z $(git -C "$repo" status --porcelain -- sources.json) ]] ||
+        { echo 'Local changes of sources.json preserved; nothing changed.' >&2; return 1; }
     file="$repo/sources.json"
     kind=$(jq -er --arg n "$name" '.skills[$n].source.kind // empty' "$file") || { echo "No skill $name in the library." >&2; return 1; }
     [[ "$kind" != local ]] || { echo "$name has no external source and no update policy." >&2; return 1; }
     value=false; [[ "$policy" == auto ]] && value=true
     current=$(jq -r --arg n "$name" '.skills[$n].auto_update == true' "$file") || return 1
     if [[ "$current" == "$value" ]]; then echo "$name: update policy already $policy"; return 0; fi
+    # A checkout with CRLF endings keeps them; lines are compared without the CR.
     changed=$(awk -v start="    \"$name\": {" -v value="$value" '
-        $0 == start { inside = 1 }
+        { line = $0; sub(/\r$/, "", line) }
+        line == start { inside = 1 }
         inside && /^    },?\r?$/ { inside = 0 }
         inside && !done && /^      "auto_update": (true|false),?\r?$/ { sub(/(true|false)/, value); done = 1 }
         { print }
@@ -406,7 +413,7 @@ set_update_policy() {
     git -C "$repo" add -- sources.json || return 1
     service_git -C "$repo" commit -q -m "Set $name update policy to $policy
 
-Agent-Skills-Client: 1" || return 1
+Agent-Skills-Client: 1" -- sources.json || return 1
     echo "$name: update policy $policy; publishing"
     sync_repository
 }

@@ -31,6 +31,7 @@ Usage: skillarium <command>
   approve <skill> <commit>       accept exactly the reviewed result
   resolve <skill> <commit> keep-ours|take-upstream|merged
                                  settle a conflict
+  policy <skill> auto|confirm    take compatible updates automatically or confirm each
   add <folder|link> [--policy auto|confirm]
                                  add a skill: an own folder, or a link to a repository,
                                  a skill folder or its SKILL.md (skillarium add --help)
@@ -393,16 +394,18 @@ try {
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
             $code = $LASTEXITCODE
         }
-        { $_ -in @('updates', 'review', 'approve', 'resolve') } {
+        { $_ -in @('updates', 'review', 'approve', 'resolve', 'policy') } {
             # The library's update review lives in the installer; the library comes from the configuration.
             if (-not (Get-CurrentVersion)) { throw 'Skillarium is not installed: skillarium install.' }
-            $positional = @{ updates = @(); review = @('Skill'); approve = @('Skill', 'Commit'); resolve = @('Skill', 'Commit', 'Strategy') }[$command]
+            $positional = @{ updates = @(); review = @('Skill'); approve = @('Skill', 'Commit'); resolve = @('Skill', 'Commit', 'Strategy')
+                policy = @('Skill', 'Policy') }[$command]
             if ($rest.Count -ne $positional.Count) {
                 throw "Usage: skillarium $command$(-join ($positional | ForEach-Object { ' <' + $_.ToLower() + '>' }))"
             }
             if ($command -eq 'resolve' -and $rest[2] -notin @('keep-ours', 'take-upstream', 'merged')) {
                 throw 'The strategy is keep-ours, take-upstream or merged.'
             }
+            if ($command -eq 'policy' -and $rest[1] -notin @('auto', 'confirm')) { throw 'The policy is auto or confirm.' }
             $installerArgs = @('-Mode', ($command.Substring(0, 1).ToUpper() + $command.Substring(1)))
             for ($i = 0; $i -lt $positional.Count; $i++) { $installerArgs += @(('-' + $positional[$i]), [string]$rest[$i]) }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }

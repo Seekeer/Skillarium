@@ -423,6 +423,12 @@ function Sync-Repository {
 function Set-UpdatePolicy {
     param([string]$Name, [ValidateSet('auto', 'confirm')][string]$Policy)
     Sync-Repository
+    # Checked here too: without origin the synchronization above returns before its own checks.
+    Assert-LibraryWritable
+    if (@(Invoke-Git -GitArgs @('diff', '--cached', '--name-only')).Count) { throw 'Staged changes preserved; nothing changed.' }
+    if (@(Invoke-Git -GitArgs @('status', '--porcelain', '--', 'sources.json')).Count) {
+        throw 'Local changes of sources.json preserved; nothing changed.'
+    }
     $path = Join-Path $repo 'sources.json'
     $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
     $entry = ($text | ConvertFrom-Json).skills.$Name
@@ -449,7 +455,7 @@ function Set-UpdatePolicy {
     }
     [IO.File]::WriteAllText($path, $changed, (New-Object Text.UTF8Encoding($false)))
     Invoke-Git -GitArgs @('add', '--', 'sources.json') | Out-Null
-    Invoke-ServiceGit -GitArgs @('commit', '-q', '-m', "Set $Name update policy to $Policy`n`nAgent-Skills-Client: 1") | Out-Null
+    Invoke-ServiceGit -GitArgs @('commit', '-q', '-m', "Set $Name update policy to $Policy`n`nAgent-Skills-Client: 1", '--', 'sources.json') | Out-Null
     Write-Output "${Name}: update policy $Policy; publishing"
     Sync-Repository
 }

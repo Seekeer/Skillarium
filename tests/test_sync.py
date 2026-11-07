@@ -238,11 +238,12 @@ class LinuxClientTests(unittest.TestCase):
                                                           expected=1))
         self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
                                                     policy='auto', pending=False))
-        # A switch the hosting has not accepted yet is shown as pending.
+        # A switch the hosting has not accepted yet is shown as pending, in both directions.
+        lib.sync(self.client, '--policy', args=['first-skill', 'confirm'])
         lib.host.faults['auth'] = 10
-        lib.sync(self.client, '--policy', args=['first-skill', 'confirm'], expected=1)
-        self.assertEqual(self.update_status()['policy'], 'confirm')
-        self.assertTrue(self.update_status()['pending'])
+        lib.sync(self.client, '--policy', args=['first-skill', 'auto'], expected=1)
+        self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
+                                                    policy='auto', pending=True))
 
     def update_status(self):
         env = dict(self.lib.env, HOME=str(self.lib.home), XDG_CACHE_HOME=str(self.lib.home / '.cache'))
@@ -251,6 +252,30 @@ class LinuxClientTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         line = [item for item in result.stdout.splitlines() if item.startswith('{')][-1]
         return next(row for row in json.loads(line)['skills'] if row['name'] == 'first-skill')['update']
+
+    def test_policy_switch_keeps_staged_and_manual_changes_and_reads_crlf(self):
+        lib = self.lib
+        lib.sync(self.client)
+        # A checkout with CRLF endings is switched like any other.
+        lib.git(self.client, 'config', 'core.autocrlf', 'true')
+        (self.client / 'sources.json').unlink()
+        lib.git(self.client, 'checkout', '--', 'sources.json')
+        self.assertIn(b'\r\n', (self.client / 'sources.json').read_bytes())
+        lib.sync(self.client, '--policy', args=['first-skill', 'confirm'])
+        self.assertFalse(lib.registry()['skills']['first-skill']['auto_update'])
+        # Without origin the synchronization returns early; the switch still checks for itself.
+        lib.git(self.client, 'remote', 'remove', 'origin')
+        head = lib.git(self.client, 'rev-parse', 'HEAD')
+        (self.client / 'notes.txt').write_text('mine')
+        lib.git(self.client, 'add', 'notes.txt')
+        self.assertIn('Staged changes preserved',
+                      lib.sync(self.client, '--policy', args=['first-skill', 'auto'], expected=1))
+        lib.git(self.client, 'reset', '-q', 'notes.txt')
+        registry = self.client / 'sources.json'
+        registry.write_bytes(registry.read_bytes() + b'\n')
+        self.assertIn('Local changes of sources.json preserved',
+                      lib.sync(self.client, '--policy', args=['first-skill', 'auto'], expected=1))
+        self.assertEqual(lib.git(self.client, 'rev-parse', 'HEAD'), head)
 
     def test_confirm_update_review_and_approval_on_client(self):
         lib = self.lib

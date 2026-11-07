@@ -130,11 +130,12 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('No skill missing-skill', policy('auto', expected=1, name='missing-skill'))
         self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
                                                     policy='auto', pending=False))
-        # A switch the hosting has not accepted yet is shown as pending.
+        # A switch the hosting has not accepted yet is shown as pending, in both directions.
+        policy('confirm')
         lib.host.faults['auth'] = 10
-        policy('confirm', expected=1)
-        self.assertEqual(self.update_status()['policy'], 'confirm')
-        self.assertTrue(self.update_status()['pending'])
+        policy('auto', expected=1)
+        self.assertEqual(self.update_status(), dict(source=lib.upstream.as_uri() + ' skills/first-skill',
+                                                    policy='auto', pending=True))
 
     def update_status(self):
         import json
@@ -148,6 +149,23 @@ class WindowsClientTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         line = [item for item in result.stdout.splitlines() if item.startswith('{')][-1]
         return next(row for row in json.loads(line)['skills'] if row['name'] == 'first-skill')['update']
+
+    def test_policy_switch_keeps_staged_and_manual_changes(self):
+        lib = self.lib
+        lib.powershell(self.client)
+        # Without origin the synchronization returns early; the switch still checks for itself.
+        lib.git(self.client, 'remote', 'remove', 'origin')
+        head = lib.git(self.client, 'rev-parse', 'HEAD')
+        policy = lambda: lib.powershell(self.client, 'Policy', expected=1, extra=['-Skill', 'first-skill', '-Policy', 'confirm'])
+        (self.client / 'notes.txt').write_text('mine')
+        lib.git(self.client, 'add', 'notes.txt')
+        self.assertIn('Staged changes preserved', policy())
+        lib.git(self.client, 'reset', '-q', 'notes.txt')
+        registry = self.client / 'sources.json'
+        registry.write_bytes(registry.read_bytes() + b'\n')
+        self.assertIn('Local changes of sources.json preserved', policy())
+        self.assertEqual(lib.git(self.client, 'rev-parse', 'HEAD'), head)
+        self.assertEqual((self.client / 'notes.txt').read_text(), 'mine')
 
     def test_conflict_resolution_with_merged_result(self):
         lib = self.lib

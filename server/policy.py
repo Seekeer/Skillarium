@@ -40,32 +40,44 @@ def registry_units(repo, revision):
     if data is None:
         return {}
     registry = json.loads(data.decode('utf-8'))
+    # Separate kinds: a top-level key may itself be spelled like "skills/<name>".
     units = {('registry', key): json.dumps(value, sort_keys=True)
              for key, value in registry.items() if key != 'skills'}
     for name, entry in (registry.get('skills') or {}).items():
-        units[('registry', 'skills/' + name)] = json.dumps(entry, sort_keys=True)
+        units[('skill-entry', name)] = json.dumps(entry, sort_keys=True)
     return units
 
 
-def policy_only(before, after):
+def label(unit):
+    kind, key = unit
+    return {'upstream': 'upstream/', 'skill-entry': 'skills/'}.get(kind, '') + key
+
+
+def policy_only(unit, before, after):
     """An existing external skill whose entry changed in auto_update alone.
 
     The update policy only decides whether an update waits for a person, so any
     machine may switch it, both ways; the rest of the entry stays server state.
     """
-    if before is None or after is None:
+    if unit[0] != 'skill-entry' or before is None or after is None:
         return False
     old, new = json.loads(before), json.loads(after)
-    if not isinstance(old, dict) or not isinstance(new, dict) or (old.get('source') or {}).get('kind') == 'local':
+    if not isinstance(old, dict) or not isinstance(new, dict):
         return False
-    rest = lambda entry: {key: value for key, value in entry.items() if key != 'auto_update'}
-    return (rest(old) == rest(new) and isinstance(new.get('auto_update'), bool)
-            and old.get('auto_update') != new.get('auto_update'))
+    if not all(isinstance(entry.get('source'), dict) and entry['source'].get('kind') in ('git', 'url')
+               for entry in (old, new)):
+        return False
+    if not isinstance(old.get('auto_update'), bool) or not isinstance(new.get('auto_update'), bool):
+        return False
+    # Canonical JSON keeps types apart: Python alone takes true for 1 and false for 0.
+    rest = lambda entry: json.dumps({key: value for key, value in entry.items() if key != 'auto_update'},
+                                    sort_keys=True)
+    return rest(old) == rest(new) and old['auto_update'] != new['auto_update']
 
 
 def unit_value(repo, revision, unit, cache):
     kind, key = unit
-    if kind == 'registry':
+    if kind in ('registry', 'skill-entry'):
         if revision not in cache:
             try:
                 cache[revision] = registry_units(repo, revision)
@@ -215,8 +227,8 @@ def evaluate(repo, base, head):
             for unit in set(before) | set(after):
                 if before.get(unit) == after.get(unit):
                     continue
-                if policy_only(before.get(unit), after.get(unit)):
-                    notes.append(f'{unit[1]}: update policy changed')
+                if policy_only(unit, before.get(unit), after.get(unit)):
+                    notes.append(f'{label(unit)}: update policy changed')
                 else:
                     units.add(unit)
         elif parts[0] == 'upstream' and len(parts) > 2:
@@ -250,9 +262,8 @@ def evaluate(repo, base, head):
                                unit_value(repo, item['revision'], unit, cache) == final and
                                unit_value(repo, item['parent'], unit, cache) != final
                                for item in history)
-                label = 'upstream/' + unit[1] if unit[0] == 'upstream' else unit[1]
                 if not endorsed:
-                    errors.append(f'{label}: control change must come from the assigned server {author}')
+                    errors.append(f'{label(unit)}: control change must come from the assigned server {author}')
             notes.append(f'Control changes checked against assigned server {server}')
     return errors, notes
 

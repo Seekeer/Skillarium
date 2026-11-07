@@ -36,6 +36,7 @@ Usage: skillarium <command>
   approve <skill> <commit>       accept exactly the reviewed result
   resolve <skill> <commit> keep-ours|take-upstream|merged
                                  settle a conflict
+  policy <skill> auto|confirm    take compatible updates automatically or confirm each
   add <folder|link> [--policy auto|confirm]
                                  add a skill: an own folder, or a link to a repository,
                                  a skill folder or its SKILL.md (see: skillarium add --help)
@@ -447,7 +448,7 @@ case "$command" in
     disable-updates) cmd_disable_updates ;;
     server) run_role server/setup.sh "$@" ;;
     client) run_role scripts/setup-client.sh "$@" ;;
-    updates|review|approve|resolve)
+    updates|review|approve|resolve|policy)
         [[ -f "$home/current/VERSION" ]] || die 'Skillarium is not installed: skillarium install'
         exec bash "$home/current/install.sh" "--$command" "$@" ;;
     add)

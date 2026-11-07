@@ -456,10 +456,12 @@ cmd_status() {
     merged_skills=$(git -C "$repo" show "refs/remotes/origin/$main_branch:sources.json" 2>/dev/null | jq -c '.skills' 2>/dev/null) ||
         merged_skills=''
     [[ -n "$merged_skills" ]] || merged_skills='{}'
+    # `//` would take a merged false for a missing value, so presence is tested explicitly.
     updates=$(jq -c --argjson merged "$merged_skills" '.skills | with_entries(select(.value.source.kind != "local")
+        | .key as $k | (.value.auto_update == true) as $local
         | .value = {source: (.value.source.url + (if (.value.source.path // ".") == "." then "" else " " + .value.source.path end)),
-                    policy: (if .value.auto_update then "auto" else "confirm" end),
-                    pending: (($merged[.key].auto_update // .value.auto_update) != .value.auto_update)})' \
+                    policy: (if $local then "auto" else "confirm" end),
+                    pending: ((if ($merged | has($k)) then ($merged[$k].auto_update == true) else $local end) != $local)})' \
         "$repo/sources.json") || return 1
     while IFS= read -r name; do
         [[ -n "$name" ]] || continue

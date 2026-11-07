@@ -329,6 +329,13 @@ test('switches the update policy of an external skill and shows it as pending un
   const local = JSON.parse(fs.readFileSync(path.join(fixture.library, 'sources.json'), 'utf8'));
   expect(local.skills[OTHER].auto_update).toBe(false);
   expect(git(fixture.library, fixture.env, 'log', '-1', '--format=%s')).toBe(`Set ${OTHER} update policy to confirm`);
+
+  // While that switch waits, another one stops before changing anything and says so.
+  await policy.click();
+  await expect(page.getByRole('alert')).toContainText('Действие не завершилось');
+  await expect(policy).toHaveAttribute('aria-checked', 'false');
+  await expect(row(page, OTHER).getByText('Ждёт принятия')).toBeVisible();
+  expect(git(fixture.library, fixture.env, 'log', '-1', '--format=%s')).toBe(`Set ${OTHER} update policy to confirm`);
 });
 
 test('a library of a newer format is shown as read-only with an update check', async () => {

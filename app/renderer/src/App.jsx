@@ -303,7 +303,7 @@ export default function App() {
     setNotice(null);
     try {
       const result = await call();
-      if (result) handle(result);
+      if (result) await handle(result);
     } catch (error) {
       setNotice({ tone: 'error', text: reason(error) });
     } finally {
@@ -339,13 +339,18 @@ export default function App() {
     });
 
   const toggleGlobal = (row) => act(`global|${row.name}`, () => api.setGlobal(row.name, !row.global.enabled), (result) => report(result));
-  const togglePolicy = (row) => act(`policy|${row.name}`, () => api.setPolicy(row.name, row.update.policy !== 'auto'),
-    (result) => {
-      // The switch is committed here; only its publication waits for the next synchronization.
-      if (result.code !== 0 && result.messages.some((line) => /Publication pending/.test(line))) {
+  const togglePolicy = (row) => {
+    const wanted = row.update.policy === 'auto' ? 'confirm' : 'auto';
+    return act(`policy|${row.name}`, () => api.setPolicy(row.name, wanted === 'auto'), async (result) => {
+      if (result.code === 0) return;
+      // A failed run may or may not have committed the switch: the library state decides what to say.
+      const after = await api.status();
+      const update = after?.json?.skills?.find((skill) => skill.name === row.name)?.update;
+      if (update?.policy === wanted && update.pending) {
         setNotice({ tone: 'warn', text: `Политика «${row.name}» изменена на этом компьютере и будет опубликована при следующей синхронизации.`, details: result.messages });
       } else report(result);
     });
+  };
   const register = () => act('register', () => api.register(),
     (result) => report(result, 'Проект добавлен, но часть скиллов из его списка не подключена. Подробности ниже.'));
   const resolve = (request) => {
