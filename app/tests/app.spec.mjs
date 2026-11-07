@@ -391,6 +391,11 @@ test('settings show versions and follow the app update to a restart', async () =
   await push({ state: 'downloading', version: '0.2.0', percent: 42 });
   await expect(summary).toHaveText('Загружаю версию 0.2.0 — 42%…');
   await expect(check).toBeDisabled();
+  // A build under verification downloads but offers no installation.
+  await push({ state: 'ready', version: '0.2.0', install: false });
+  await expect(summary).toContainText('установка выключена переменной SKILLARIUM_NO_INSTALL');
+  await expect(dialog.getByRole('button', { name: 'Перезапустить и обновить' })).toBeDisabled();
+  await expect(page.getByTestId('update-ready').getByRole('button')).toHaveCount(0);
   await push({ state: 'ready', version: '0.2.0' });
   await expect(summary).toContainText('Версия 0.2.0 загружена');
   await expect(dialog.getByRole('button', { name: 'Перезапустить и обновить' })).toBeEnabled();
