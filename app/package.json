@@ -2,7 +2,7 @@
   "name": "agent-skills-app",
   "productName": "Skillarium",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Skillarium: shared agent skills on every machine and in every project",
   "author": {
     "name": "Skillarium"
