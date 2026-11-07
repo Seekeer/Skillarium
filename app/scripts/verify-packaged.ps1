@@ -6,8 +6,8 @@
 #   powershell -File app\scripts\verify-packaged.ps1 -Stop
 #
 # -Version builds the app under another version number: with an older one the running app
-# finds the newest release, downloads it and offers a restart. Do not press that restart:
-# it would run the real installer for this user.
+# finds the newest release and downloads it. SKILLARIUM_NO_INSTALL keeps that download from
+# ever running the real installer for this user, on quit or from the window.
 param(
     [string]$Version,
     # Lets a driver (Playwright connectOverCDP) click and take screenshots on loopback.
@@ -107,6 +107,7 @@ $env:APPDATA = "$profileRoot\AppData\Roaming"
 $env:SKILLARIUM_HOME = "$profileRoot\AppData\Local\Skillarium"
 $env:SKILLARIUM_LIBRARY = $library
 $env:SKILLARIUM_NO_BRIDGE = '1'
+$env:SKILLARIUM_NO_INSTALL = '1'
 $env:SKILLARIUM_TASK_NAME = 'Skillarium-Verify-Packaged'
 $env:SKILLARIUM_UPDATE_TASK = 'Skillarium-Verify-Packaged-Update'
 # Electron's own profile is named explicitly too, not only through APPDATA.

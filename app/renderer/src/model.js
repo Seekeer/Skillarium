@@ -43,7 +43,9 @@ export function updateSummary(update) {
     case 'disabled': return 'Автообновление выключено переменной SKILLARIUM_NO_UPDATES.';
     case 'checking': return 'Проверяю обновления…';
     case 'downloading': return `Загружаю версию ${update.version}${Number.isFinite(update.percent) ? ` — ${update.percent}%` : ''}…`;
-    case 'ready': return `Версия ${update.version} загружена и установится при перезапуске.`;
+    case 'ready': return update.install === false
+      ? `Версия ${update.version} загружена, но установка выключена переменной SKILLARIUM_NO_INSTALL.`
+      : `Версия ${update.version} загружена и установится при перезапуске.`;
     case 'current': return 'Установлена последняя версия.';
     case 'error': return `Проверить обновления не удалось: ${update.message}`;
     default: return 'Обновления ещё не проверялись.';

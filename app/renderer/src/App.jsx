@@ -190,6 +190,14 @@ function Connect({ library, onConnected, onChoose }) {
 
 function UpdateBanner({ update }) {
   if (update?.state !== 'ready') return null;
+  if (update.install === false) {
+    return (
+      <div className="notice info" role="status" data-testid="update-ready">
+        <p>Загружена новая версия Skillarium {update.version}. Эта сборка её не устанавливает: установка выключена
+          переменной SKILLARIUM_NO_INSTALL.</p>
+      </div>
+    );
+  }
   return (
     <div className="notice info" role="status" data-testid="update-ready">
       <p>Загружена новая версия Skillarium {update.version}. Она установится при выходе из приложения.</p>
@@ -205,6 +213,7 @@ function Settings({ library, update, onUpdate, onChooseLibrary, onClose }) {
   useEffect(() => { api.about().then(setAbout); }, []);
   const state = update?.state;
   const canCheck = !['development', 'disabled', 'checking', 'downloading', 'ready'].includes(state);
+  const canInstall = state === 'ready' && update.install !== false;
   const engine = about?.engine;
   return (
     <Modal title="Настройки" onCancel={onClose}>
@@ -232,10 +241,11 @@ function Settings({ library, update, onUpdate, onChooseLibrary, onClose }) {
       </section>
       <div className="modal-actions">
         {/* Focus starts on the update action; on Close while there is nothing to do. */}
-        <button type="button" className="quiet" data-autofocus={(state !== 'ready' && !canCheck) || undefined}
+        <button type="button" className="quiet" data-autofocus={(!canInstall && !canCheck) || undefined}
           onClick={onClose}>Закрыть</button>
         {state === 'ready' ? (
-          <button type="button" className="primary" data-autofocus onClick={() => api.installUpdate()}>Перезапустить и обновить</button>
+          <button type="button" className="primary" data-autofocus disabled={!canInstall}
+            onClick={() => api.installUpdate()}>Перезапустить и обновить</button>
         ) : (
           <button type="button" className="primary" data-autofocus disabled={!canCheck}
             onClick={() => api.checkUpdate().then(onUpdate)}>
