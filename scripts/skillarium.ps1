@@ -269,11 +269,35 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wP
 $updateTask = if ($env:SKILLARIUM_UPDATE_TASK) { $env:SKILLARIUM_UPDATE_TASK } else {
     'Skillarium-Update-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
 
-# Hourly self-update for machines without the app (the app updates itself and its engine).
-function Enable-Updates {
+# The task runs the hidden launcher of the installed engine: powershell.exe -WindowStyle Hidden
+# would flash its console. An engine without the launcher (after a rollback) runs PowerShell itself.
+function New-UpdateAction {
+    $launcher = Join-Path $root 'current\scripts\update-hidden.vbs'
+    if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+        return New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument "//B //NoLogo `"$launcher`"" -WorkingDirectory $root
+    }
     $script = Join-Path $root 'current\scripts\skillarium.ps1'
     $arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" self-update"
-    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
+    return New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
+}
+
+# After a self-update or rollback the task's action follows the installed engine, keeping its
+# schedule: a task of an older engine moves to the hidden launcher, and back when a rollback
+# installs an engine without it. A missing task stays missing (the app updates such machines).
+function Repair-UpdateTask {
+    $task = Get-ScheduledTask -TaskName $updateTask -ErrorAction SilentlyContinue
+    if (-not $task) { return }
+    $action = New-UpdateAction
+    if ($task.Actions.Count -eq 1 -and $task.Actions[0].Execute -eq $action.Execute -and
+        $task.Actions[0].Arguments -eq $action.Arguments -and [string]$task.Actions[0].WorkingDirectory -eq [string]$action.WorkingDirectory) { return }
+    Set-ScheduledTask -TaskName $updateTask -Action $action | Out-Null
+    if ($action.Execute -like '*wscript.exe') { Write-Output "Self-update task now runs hidden: $updateTask" }
+    else { Write-Output "Self-update task runs PowerShell directly for this engine: $updateTask" }
+}
+
+# Hourly self-update for machines without the app (the app updates itself and its engine).
+function Enable-Updates {
+    $action = New-UpdateAction
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(30) -RepetitionInterval (New-TimeSpan -Hours 1)
     $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
@@ -353,6 +377,7 @@ function Invoke-Rollback {
     Write-Text (Join-Path $root 'skip') $current
     Set-Current $previous
     Write-Output "ROLLED BACK: Skillarium $current -> $previous; $current is skipped until a newer release"
+    try { Repair-UpdateTask } catch { Write-Warning "Self-update task unchanged: $($_.Exception.Message)" }
 }
 
 function Show-SkillariumStatus {
@@ -383,7 +408,10 @@ $code = 0
 try {
     switch ($command) {
         'status' { Show-SkillariumStatus }
-        'self-update' { Invoke-SelfUpdate $rest }
+        'self-update' {
+            Invoke-SelfUpdate $rest
+            try { Repair-UpdateTask } catch { Write-Warning "Self-update task unchanged: $($_.Exception.Message)" }
+        }
         'rollback' { Invoke-Rollback }
         'install' { Invoke-Install $rest }
         'enable-updates' { Enable-Updates }

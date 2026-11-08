@@ -137,7 +137,7 @@ class PowerShellEngineInstallTests(EngineInstall, unittest.TestCase):
         super().setUp()
         self.command = self.home / 'bin' / 'skillarium.cmd'
 
-    def run_skillarium(self, *args, expected=0, env=None):
+    def run_skillarium(self, *args, expected=0, env=None, script=None):
         arguments = [{'--channel': '-Channel', '--version': '-Version'}.get(item, item) for item in args]
         environment = dict(os.environ, SKILLARIUM_HOME=str(self.home), APPDATA=str(self.root / 'appdata'),
                            SKILLARIUM_TASK_NAME=TEST_TASK, SKILLARIUM_UPDATE_TASK=TEST_TASK + '-Update',
@@ -145,12 +145,90 @@ class PowerShellEngineInstallTests(EngineInstall, unittest.TestCase):
         if not env:
             environment.pop('SKILLARIUM_LIBRARY', None)
         result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                                 '-File', str(ROOT / 'scripts' / 'skillarium.ps1'), *arguments],
+                                 '-File', str(script or ROOT / 'scripts' / 'skillarium.ps1'), *arguments],
                                 env=environment, capture_output=True, text=True, encoding='utf-8', errors='replace')
         output = result.stdout + result.stderr
         if expected is not None:
             self.assertEqual(result.returncode, expected, output)
         return output
+
+    def run_installed(self, *args):
+        """The installed engine, as its scheduled task runs it (current\\scripts\\skillarium.ps1)."""
+        return self.run_skillarium(*args, script=self.home / 'current' / 'scripts' / 'skillarium.ps1')
+
+    def scheduled_task(self, task):
+        """Action and first trigger start of a task; empty when there is none."""
+        script = (f"$t = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue; "
+                  "if ($t) { $t.Actions[0].Execute + '|' + $t.Actions[0].Arguments + '|' + $t.Triggers[0].StartBoundary }")
+        return subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', script],
+                              capture_output=True, text=True).stdout.strip()
+
+    def assert_task(self, task, hidden, start):
+        execute, arguments, boundary = self.scheduled_task(task).split('|', 2)
+        if hidden:
+            self.assertTrue(execute.lower().endswith('\\system32\\wscript.exe'), execute)
+            self.assertIn(str(self.home / 'current' / 'scripts' / 'update-hidden.vbs'), arguments)
+        else:
+            self.assertTrue(execute.lower().endswith('\\powershell.exe'), execute)
+            self.assertIn(str(self.home / 'current' / 'scripts' / 'skillarium.ps1'), arguments)
+        # The schedule is kept whatever the action becomes.
+        self.assertEqual(boundary, start)
+
+    def test_self_update_task_moves_to_the_hidden_launcher_from_a_real_older_engine(self):
+        task = TEST_TASK + '-Update'
+        remove = f"Unregister-ScheduledTask -TaskName '{task}' -Confirm:$false -ErrorAction SilentlyContinue"
+        self.addCleanup(subprocess.run, [POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', remove], capture_output=True)
+        # 0.1.0 is Skillarium 0.1.4 as released: powershell.exe -WindowStyle Hidden runs the task (it
+        # flashes a console), there is no launcher and nothing moves the task.
+        old_script = (ROOT / 'tests' / 'fixtures' / 'skillarium-0.1.4.ps1').read_bytes().replace(b'\r\n', b'\n')
+        files = self.releases.files
+        self.releases.files = [(name, mode, old_script if name == 'scripts/skillarium.ps1' else data)
+                               for name, mode, data in files if name != 'scripts/update-hidden.vbs']
+        self.releases.publish('0.1.0')
+        self.releases.files = files
+        self.run_skillarium('install')
+        self.run_installed('enable-updates')
+        start = self.scheduled_task(task).split('|', 2)[2]
+        self.assert_task(task, hidden=False, start=start)
+        # The old engine installs the new one but keeps running its own code: the task moves on
+        # the next run, which is the new engine's.
+        self.releases.publish('0.1.1')
+        output = self.run_installed('self-update')
+        self.assertIn('UPDATED: Skillarium 0.1.0 -> 0.1.1', output)
+        self.assertNotIn('now runs hidden', output)
+        self.assert_task(task, hidden=False, start=start)
+        self.assertIn('now runs hidden', self.run_installed('self-update'))
+        self.assert_task(task, hidden=True, start=start)
+        self.assertNotIn('now runs hidden', self.run_installed('self-update'))
+        # Rolling back to the engine without the launcher keeps the task able to run.
+        self.assertIn('runs PowerShell directly', self.run_installed('rollback'))
+        self.assertEqual(self.version(), '0.1.0')
+        self.assert_task(task, hidden=False, start=start)
+        # Back on a newer release, the same two-step move happens again.
+        self.releases.publish('0.1.2')
+        self.assertIn('UPDATED: Skillarium 0.1.0 -> 0.1.2', self.run_installed('self-update'))
+        self.assert_task(task, hidden=False, start=start)
+        self.assertIn('now runs hidden', self.run_installed('self-update'))
+        self.assert_task(task, hidden=True, start=start)
+        # A new registration runs hidden from the start.
+        self.run_installed('disable-updates')
+        self.assertEqual(self.scheduled_task(task), '')
+        self.run_installed('enable-updates')
+        self.assertIn('wscript.exe|//B //NoLogo', self.scheduled_task(task))
+        # The launcher itself runs the installed engine's self-update with its exit code.
+        launcher = self.home / 'current' / 'scripts' / 'update-hidden.vbs'
+        environment = dict(os.environ, SKILLARIUM_HOME=str(self.home), APPDATA=str(self.root / 'appdata'),
+                           SKILLARIUM_UPDATE_TASK=task, **self.releases.env())
+        wscript = os.path.join(os.environ['SystemRoot'], 'System32', 'wscript.exe')
+        self.releases.publish('0.2.0')
+        result = subprocess.run([wscript, '//B', '//NoLogo', str(launcher)], env=environment, timeout=180)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.version(), '0.2.0')
+        # A failing run reaches Task Scheduler as a failure.
+        self.releases.publish('0.3.0', corrupt=True)
+        failed = subprocess.run([wscript, '//B', '//NoLogo', str(launcher)], env=environment, timeout=180)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(self.version(), '0.2.0')
 
     def test_bootstrap_scriptblock_passes_role_arguments(self):
         self.releases.publish('0.1.0')
