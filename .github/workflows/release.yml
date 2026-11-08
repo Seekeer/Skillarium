@@ -24,11 +24,11 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -41,7 +41,7 @@ jobs:
         run: |
           npm ci
           npm run dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app-${{ runner.os }}
           if-no-files-found: error
@@ -56,8 +56,8 @@ jobs:
     needs: app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: app-*
@@ -68,7 +68,7 @@ jobs:
           python3 release/build_engine.py --version "$version" --out dist \
             --app "dist/Skillarium-Setup-$version.exe" --app "dist/Skillarium-$version.AppImage"
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
