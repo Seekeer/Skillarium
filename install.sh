@@ -94,7 +94,7 @@ sync_library_clone() {
         cat -- "$errors" >&2
         message=$(grep -v '^[[:space:]]*$' "$errors" | tail -n 1)
         write_sync_status "$repo" false "${message:-Synchronization failed.}"
-        echo "WARNING: $repo: ${message:-synchronization failed}" >&2
+        echo "WARNING: ${message:-Synchronization failed.} ($repo)" >&2
         code=1
     fi
     rm -f -- "$errors"

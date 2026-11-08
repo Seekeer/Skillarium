@@ -2,8 +2,8 @@
   "files": {
     ".gitattributes": "33a26aeab410c1c325f572e28eb94da61d399d412ad4cfec2e8b101f767d6f4b",
     "README.md": "867dd0cbb948fc3140334b18edeaa10ff51c451a5320021c5cede1ddd4e96450",
-    "install.ps1": "074f30b2a8e07165a382fcfa801d580949afdf616a539217de1eb3b943673057",
-    "install.sh": "4c2087c40a680ccf32144a248e9b9cadc49069895d87ee62c2ba6bd4e5a02fc7",
+    "install.ps1": "aa75cf3412268f0a9285902fdee9e1d8dcd31035392c613a512e847e9bc48ec8",
+    "install.sh": "60a24d3fb92ec8488c978bb99b24b4d71ffe0d3d833d040cbb41cb98c3d0d4cd",
     "projects.ps1": "9116d5f499f348c1b44327b9ec1fa04c535a6face5c343b8869b9cbf1f06166a",
     "projects.sh": "ad518ceb5c776da1c2d1b85688e94fd659ae2f52840c02b5dfe49b6b8a9050da",
     "scripts/bindings.ps1": "f85b8318bbc4ae72d012ca7c06b3b7cd12be2cf39751dc54b34baf948e05e1d8",

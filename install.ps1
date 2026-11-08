@@ -61,7 +61,8 @@ function Sync-LibraryClone {
         Sync-Repository
         Write-SyncStatus -Path $Path -Ok $true
     } catch {
-        Write-Warning "${Path}: $($_.Exception.Message)"
+        # The message comes first: a narrow console wraps the long path, not the message.
+        Write-Warning "$($_.Exception.Message) ($Path)"
         Write-SyncStatus -Path $Path -Ok $false -Message $_.Exception.Message
         $script:failed = $true
     } finally { $libraryLock.Dispose() }
