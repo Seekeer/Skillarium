@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -39,18 +40,65 @@ def config_path():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'skillarium' / 'config.json'
 
 
-def default_library():
+def library_name(path):
+    """Name of a connected library without one, as the clients give it: the repository
+    name of the clone's origin (a local remote counts too), else the folder name."""
+    try:
+        url = subprocess.run(['git', '-C', str(path), 'config', '--get', 'remote.origin.url'],
+                             capture_output=True, text=True, check=False).stdout.strip()
+    except OSError:
+        url = ''
+    text = url.replace('\\', '/').rstrip('/')
+    if text.endswith('.git'):
+        text = text[:-4]
+    match = re.search(r'[/:]([^/:]+)/([^/:]+)$', text)
+    return match.group(2) if match else Path(path).name
+
+
+def configured_libraries():
+    """Connected libraries in priority order as (name, path); the legacy "library" is one."""
+    try:
+        config = json.loads(config_path().read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(config, dict):
+        return []
+    if config.get('libraries') is not None:
+        items = [item for item in config['libraries'] or [] if isinstance(item, dict) and isinstance(item.get('path'), str) and item['path']]
+        return [(str(item.get('name') or '') or library_name(item['path']), Path(item['path'])) for item in items]
+    library = config.get('library')
+    return [(library_name(library), Path(library))] if isinstance(library, str) and library else []
+
+
+def named_library(value):
+    """A folder, or (without a path separator) the name of a connected library, as the clients read it."""
+    if not any(separator in value for separator in '/\\:'):
+        for known, path in configured_libraries():
+            if known == value:
+                return path
+        if not is_library(Path(value)):
+            raise ValueError(f'Library is not connected: {value} '
+                             f'(connected: {", ".join(known for known, _ in configured_libraries())})')
+    return Path(value)
+
+
+def default_library(name=None):
     """Same order as the clients: SKILLARIUM_LIBRARY, the engine folder itself
-    when it is a library (legacy layout), then the configured library."""
+    when it is a library (legacy layout), then the first connected library whose
+    folder is a library. A name or folder picks a library instead."""
+    if name:
+        return named_library(name)
     if os.environ.get('SKILLARIUM_LIBRARY'):
-        return Path(os.environ['SKILLARIUM_LIBRARY'])
+        # Evaluated as an argparse default: an unknown value is reported later as a missing library.
+        try:
+            return named_library(os.environ['SKILLARIUM_LIBRARY'])
+        except ValueError:
+            return Path(os.environ['SKILLARIUM_LIBRARY'])
     if is_library(ENGINE):
         return ENGINE
-    try:
-        configured = json.loads(config_path().read_text(encoding='utf-8')).get('library')
-    except (OSError, ValueError):
-        configured = None
-    return Path(configured) if configured else None
+    libraries = configured_libraries()
+    reachable = [path for _, path in libraries if is_library(path)]
+    return (reachable or [path for _, path in libraries] or [None])[0]
 
 
 def manifest_plan(repo):
@@ -206,8 +254,10 @@ def dispatch(args):
     # The client manifest describes the engine's own files, wherever the library is.
     if args.command == 'client-manifest':
         return client_manifest(ENGINE if args.repo is None else args.repo.resolve(), args.write)
+    if getattr(args, 'library', None):
+        args.repo = default_library(args.library)
     if args.repo is None:
-        raise ValueError(f'Skill library not found: pass --repo <folder> or set "library" in {config_path()}')
+        raise ValueError(f'Skill library not found: pass --repo <folder> or connect one with skillarium client ({config_path()})')
     repo = args.repo.resolve()
     if args.command == 'absorb-updater':
         return absorb_updater.absorb(repo, args.updater, args.revision)
@@ -250,7 +300,7 @@ def dispatch(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, default=default_library(),
-                        help='Library working copy (default: SKILLARIUM_LIBRARY, this repository, the configured library)')
+                        help='Library working copy (default: SKILLARIUM_LIBRARY, this repository, the first connected library)')
     parser.add_argument('--catalog', help='Compatibility: the only library is agent-skills')
     commands = parser.add_subparsers(dest='command', required=True)
     names = ('status', 'add', 'maintain', 'check', 'approve', 'register', 'resolve', 'set-policy', 'assign-server',
@@ -295,6 +345,7 @@ def main():
             sub.add_argument('--policy', choices=('auto', 'confirm'), help='Без него команда спросит')
             sub.add_argument('--path', help='Папка скилла в репозитории, если ссылка ведёт на сам репозиторий')
             sub.add_argument('--ref', help='Ветка или полный ref вместо основной ветки')
+            sub.add_argument('--library', help='Имя подключённой библиотеки; по умолчанию первая в списке')
             sub.add_argument('--no-publish', dest='publish', action='store_false', help='Своя папка: только скопировать')
         if command == 'client-manifest':
             sub.add_argument('--write', action='store_true')

@@ -34,13 +34,37 @@ if [[ "$mode" == --uninstall ]]; then
     systemctl --user daemon-reload
     exit 0
 fi
+check_config || exit 1
+# Every library was disconnected (an empty list, unlike a machine never connected).
+if [[ ("$mode" == --sync-only || "$mode" == --link-only) && -z "$library_arg" && -z "${SKILLARIUM_LIBRARY:-}" ]] &&
+    ! is_library "$engine" && [[ $(configured_libraries | jq length) -eq 0 ]] && libraries_configured; then
+    echo 'No library is connected; nothing to sync.'
+    exit 0
+fi
 resolve_library "$library_arg" || exit 2
 engine_real=$(cd -- "$engine" && pwd -P)
 
-lock_path=$(git -C "$repo" rev-parse --git-path agent-skills-sync.lock)
-[[ "$lock_path" = /* ]] || lock_path="$repo/$lock_path"
-exec 9>"$lock_path"
-if ! flock -n 9; then echo 'Another sync is running; skipped.'; exit 0; fi
+# Without an explicit library a synchronization covers every connected library.
+explicit=false
+if [[ -n "$library_arg" || -n "${SKILLARIUM_LIBRARY:-}" ]] || is_library "$engine"; then explicit=true; fi
+# A disconnected library must not come back through a run that only started with it.
+if [[ "$explicit" == true ]]; then command_library=$repo; else command_library=''; fi
+
+# Opens the lock of one library clone ($1) on a new descriptor, stored in library_lock_fd;
+# fails while another run holds it.
+open_library_lock() {
+    local path
+    path=$(git -C "$1" rev-parse --git-path agent-skills-sync.lock) || return 1
+    [[ "$path" = /* ]] || path="$1/$path"
+    exec {library_lock_fd}>"$path" || return 1
+    flock -n "$library_lock_fd" && return 0
+    exec {library_lock_fd}>&-
+    return 1
+}
+
+if [[ "$mode" != --install && "$mode" != --sync-only && "$mode" != --link-only ]]; then
+    open_library_lock "$repo" || { echo 'Another sync is running; skipped.'; exit 0; }
+fi
 
 source "$engine/scripts/client.sh"
 source "$engine/scripts/bindings.sh"
@@ -57,11 +81,72 @@ case "$mode" in
     --resolve) resolve_update "$2" "$3" "$4" && exit 0; exit 1 ;;
     --policy) set_update_policy "$2" "$3" && exit 0; exit 1 ;;
 esac
+# Fetches and publishes one library ($1) under its own lock and records the result; its
+# failure is reported without stopping the others. Returns 2 when another run holds it.
+sync_library_clone() {
+    local repo=$1 errors message code=0
+    if ! open_library_lock "$repo"; then echo "Another sync of $repo is running; skipped."; return 2; fi
+    errors=$(mktemp) || { exec {library_lock_fd}>&-; return 1; }
+    if sync_repository 2>"$errors"; then
+        cat -- "$errors" >&2
+        write_sync_status "$repo" true
+    else
+        cat -- "$errors" >&2
+        message=$(grep -v '^[[:space:]]*$' "$errors" | tail -n 1)
+        write_sync_status "$repo" false "${message:-Synchronization failed.}"
+        echo "WARNING: $repo: ${message:-synchronization failed}" >&2
+        code=1
+    fi
+    rm -f -- "$errors"
+    exec {library_lock_fd}>&-
+    return "$code"
+}
+
 result=0
-if [[ "$mode" != --link-only ]]; then sync_repository || result=1; fi
-# Global links and registered project bindings follow the local choices.
-{ load_bindings && apply_bindings; } || result=1
-link_builtin_skills || result=1
+if [[ "$mode" != --link-only ]]; then
+    targets=()
+    if [[ "$explicit" == true ]]; then
+        targets=("$repo")
+    else
+        while IFS= read -r -d '' name && IFS= read -r -d '' path && IFS= read -r -d '' url; do
+            if is_library "$path" && physical=$(cd -- "$path" 2>/dev/null && pwd -P); then
+                targets+=("$physical")
+            else
+                echo "WARNING: Library $name is unavailable: $path" >&2; result=1
+            fi
+        done < <(configured_rows)
+    fi
+    for target in ${targets[@]+"${targets[@]}"}; do
+        code=0
+        sync_library_clone "$target" || code=$?
+        # The library given to this command alone is skipped as a whole while it is busy.
+        if ((code == 2)) && [[ "$explicit" == true ]]; then exit 0; fi
+        ((code != 1)) || result=1
+    done
+fi
+# Global links and registered project bindings of all libraries follow the local choices.
+enter_bindings_lock || exit 1
+# A library installed by hand joins the connected ones, so the timer needs no argument and
+# keeps syncing all of them. The legacy layout keeps its own line.
+connected=false
+while IFS= read -r -d '' name && IFS= read -r -d '' path && IFS= read -r -d '' url; do
+    if is_library "$path" && [[ "$(cd -- "$path" 2>/dev/null && pwd -P)" == "$repo" ]]; then connected=true; break; fi
+done < <(configured_rows)
+if [[ "$mode" == --install && "$explicit" == true && "$engine_real" != "$repo" && "$connected" != true ]]; then
+    configured=$(configured_libraries) || exit 1
+    name=$(jq -r '.[].name' <<<"$configured" | new_library_name "$repo")
+    url=$(git -C "$repo" config --get remote.origin.url 2>/dev/null) || url=''
+    libraries=$(jq -c --arg n "$name" --arg p "$repo" --arg u "$url" '. + [{name: $n, path: $p, url: $u}]' <<<"$configured")
+    write_skillarium_config "$libraries" || { echo 'Cannot write the Skillarium configuration.' >&2; exit 1; }
+    connected=true
+    echo "CONNECTED: $repo as $name"
+fi
+if ! { load_bindings && apply_bindings; }; then
+    echo 'Some skill links could not be applied; existing files were preserved.' >&2; result=1
+fi
+if ! link_builtin_skills; then
+    echo 'Some built-in skills could not be linked; existing files were preserved.' >&2; result=1
+fi
 if ((result)); then exit "$result"; fi
 if [[ "$mode" != --install && "$mode" != --sync-only ]]; then exit 0; fi
 
@@ -73,9 +158,15 @@ if [[ "$engine_real" == "$repo" && -z "${SKILLARIUM_NO_BRIDGE:-}" ]]; then
     if bridged=$(skillarium_bridge "$repo"); then runner=$bridged; fi
 fi
 # Quote systemd ExecStart syntax, including its percent and dollar expansion.
-# The engine runs the library given here; the legacy layout keeps its old line.
+# Connected libraries come from the configuration; a library given only to this command
+# is passed on, and the legacy layout keeps its old line.
 exec_start="/usr/bin/bash $(unit_quote "$runner/install.sh")"
-if [[ "$runner" != "$engine" || "$engine_real" != "$repo" ]]; then exec_start+=" --library $(unit_quote "$repo")"; fi
+narrow=false
+if [[ ( "$runner" != "$engine" || "$engine_real" != "$repo" ) && "$connected" != true ]]; then
+    exec_start+=" --library $(unit_quote "$repo")"
+    # A sync of a library given only to this command must not narrow the timer to it.
+    [[ "$engine_real" == "$repo" ]] || narrow=true
+fi
 exec_start+=' --sync-only'
 write_service() {
     cat >"$unit_dir/agent-skills.service" <<EOF
@@ -91,7 +182,7 @@ EOF
 if [[ "$mode" == --sync-only ]]; then
     # Scheduled runs move an existing managed timer to the bridged engine, nothing else.
     service="$unit_dir/agent-skills.service"
-    if [[ -f "$service" && $(head -n 1 "$service") == '# Managed by agent-skills' ]] &&
+    if [[ "$narrow" != true && -f "$service" && $(head -n 1 "$service") == '# Managed by agent-skills' ]] &&
         ! grep -qxF "ExecStart=$exec_start" "$service"; then
         write_service && systemctl --user daemon-reload && echo "Hourly sync now runs $runner"
     fi

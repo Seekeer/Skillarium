@@ -363,6 +363,7 @@ export default function Resolver({ sync, onCancel, onApply }) {
       <div className="resolver merge" role="dialog" aria-modal="true" aria-labelledby="resolver-title" tabIndex={-1} ref={box}>
         <header className="merge-header">
           <h2 id="resolver-title">Разбор конфликта синхронизации</h2>
+          {sync.title && <p className="merge-library">Библиотека «{sync.title}»</p>}
           <p>Левая — ваша версия, правая — версия общей библиотеки, внизу итог. Он заменит обе версии
             здесь и в библиотеке. «Применить» принимает итог файла и открывает следующий; файлы меняются
             только после «Применить всё».</p>

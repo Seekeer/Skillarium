@@ -1,16 +1,20 @@
 # Connect this Windows machine to a skill library; run by `skillarium client`.
 #
-#   skillarium client -Library https://gitea.example.org/owner/skills.git [-Path <folder>] [-NoApp]
+#   skillarium client -Library https://gitea.example.org/owner/skills.git [-Path <folder>] [-Name <name>] [-NoApp]
 #
 # Installs the Skillarium app of this engine's release, stores the Gitea token
 # (prompted, or -TokenFile) in the Git credential helper after checking write
-# access, clones the library (default %USERPROFILE%\Skillarium\library; an
-# existing clone is kept), writes the Skillarium configuration, links the
-# skills and schedules the hourly sync. Safe to repeat. Keep this file ASCII.
+# access, clones the library (the first one into %USERPROFILE%\Skillarium\library,
+# further ones into %USERPROFILE%\Skillarium\<name>; an existing clone is kept),
+# adds it to the end of the connected libraries in the Skillarium configuration,
+# links the skills and schedules the hourly sync of all libraries. Repeating it
+# with a connected library's URL only repairs that connection. Keep this file ASCII.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Library,
-    [string]$Path = (Join-Path $env:USERPROFILE 'Skillarium\library'),
+    [string]$Path,
+    # Short local name of the library; by default the repository name.
+    [string]$Name,
     [string]$TokenFile,
     [string]$Machine,
     [switch]$NoApp,
@@ -22,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $engine = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'locate.ps1')
 
 function Invoke-Git {
     param([string[]]$GitArgs, [switch]$Quiet)
@@ -64,6 +69,54 @@ function Invoke-Gitea {
         if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
         throw "Gitea $Resource answered $(if ($status) { $status } else { $_.Exception.Message })."
     }
+}
+
+# Host, hosting prefix, owner and name, lower case: the same repository on another host differs.
+function Get-LibraryKey {
+    param([string]$Url)
+    try { $parts = Split-LibraryUrl $Url } catch { return $null }
+    return "$($parts.Base)/$($parts.Owner)/$($parts.Name)".ToLowerInvariant()
+}
+
+function Find-KnownLibrary {
+    param([object[]]$Libraries, [string]$Key)
+    foreach ($item in $Libraries) {
+        $itemKey = Get-LibraryKey $item.url
+        if (-not $itemKey -and (Test-Path -LiteralPath ([IO.Path]::Combine($item.path, '.git')))) {
+            $itemKey = Get-LibraryKey (Invoke-Git -GitArgs @('-C', $item.path, 'config', '--get', 'remote.origin.url') -Quiet)
+        }
+        if ($itemKey -and $itemKey -eq $Key) { return $item }
+    }
+    return $null
+}
+
+# The configuration changes under the lock of the links (see bindings.ps1), so a parallel
+# connection, disconnection or reordering is never lost.
+function Enter-ConfigLock {
+    $folder = Join-Path $env:LOCALAPPDATA 'agent-skills'
+    [IO.Directory]::CreateDirectory($folder) | Out-Null
+    $deadline = [DateTime]::UtcNow.AddSeconds(300)
+    while ($true) {
+        try { return [IO.File]::Open((Join-Path $folder 'bindings.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+        catch [IO.IOException] {
+            if ([DateTime]::UtcNow -gt $deadline) { throw 'Skill links are being updated by another run; retry later.' }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
+# Token per host: another account on the same host would replace the stored one.
+function Test-OtherAccount {
+    param($Target, [string]$Login)
+    $request = "protocol=$($Target.Scheme)`nhost=$($Target.Host)`n`n"
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $env:GIT_TERMINAL_PROMPT = '0'
+        $stored = @($request | & git -c credential.interactive=false credential fill 2>$null)
+    } finally { $ErrorActionPreference = $previous; Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue }
+    $user = @($stored | Where-Object { $_ -like 'username=*' } | ForEach-Object { $_.Substring(9) }) | Select-Object -First 1
+    return ($user -and $user -ne $Login)
 }
 
 function Save-Credential {
@@ -110,11 +163,30 @@ try {
     $target = Split-LibraryUrl $Library
     $url = "$($target.Base)/$($target.Owner)/$($target.Name).git"
     $api = "$($target.Base)/api/v1"
+    # A library connected before keeps its folder and name: repeating only repairs it.
+    $key = Get-LibraryKey $url
+    $libraries = @(Get-ConfiguredLibraries)
+    $known = Find-KnownLibrary $libraries $key
+    if ($known) {
+        if (-not $Path) { $Path = $known.path }
+        if (-not $Name) { $Name = $known.name }
+    }
+    if (-not $Name) { $Name = $target.Name }
+    if (-not $known -and @($libraries | Where-Object { $_.name -eq $Name }).Count) { $Name = "$($target.Owner)-$($target.Name)" }
+    if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$') { throw "Invalid library name: $Name; pass -Name." }
+    if (-not $known -and @($libraries | Where-Object { $_.name -eq $Name }).Count) { throw "A library named $Name is connected already; pass -Name." }
+    if (-not $Path) {
+        $leaf = if ($libraries.Count -and -not $known) { $Name } else { 'library' }
+        $Path = Join-Path $env:USERPROFILE "Skillarium\$leaf"
+    }
     $Path = [IO.Path]::GetFullPath($Path)
     $token = Read-Token
     $user = Invoke-Gitea $api $token '/user'
     $repository = Invoke-Gitea $api $token "/repos/$($target.Owner)/$($target.Name)"
     if (-not $repository.permissions.push) { throw "The token of $($user.login) cannot write to $($target.Owner)/$($target.Name)." }
+    if (Test-OtherAccount $target $user.login) {
+        Write-Warning "Git keeps one token per host: the stored token of another account on $($target.Host) is replaced; libraries of that account stop syncing."
+    }
     Save-Credential $target $user.login $token
     Remove-Variable token
 
@@ -122,7 +194,7 @@ try {
         $origin = Invoke-Git -GitArgs @('-C', $Path, 'config', '--get', 'remote.origin.url') -Quiet
         $existing = $null
         try { $existing = Split-LibraryUrl $origin } catch { }
-        if (-not $existing -or $existing.Owner -ne $target.Owner -or $existing.Name -ne $target.Name) {
+        if (-not $existing -or (Get-LibraryKey $origin) -ne $key) {
             throw "$Path is a clone of $origin, not of $url; pass -Path."
         }
         Write-Output "Existing clone kept: $Path"
@@ -138,14 +210,22 @@ try {
     }
     if ($Machine) { Invoke-Git -GitArgs @('-C', $Path, 'config', 'agent-skills.machine', $Machine) | Out-Null }
 
-    $configPath = Join-Path $env:APPDATA 'Skillarium\config.json'
-    $config = [ordered]@{}
-    if (Test-Path -LiteralPath $configPath) {
-        (Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $config[$_.Name] = $_.Value }
-    }
-    $config['library'] = $Path
-    [IO.Directory]::CreateDirectory((Split-Path -Parent $configPath)) | Out-Null
-    [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+    # Applied to the configuration as it is now, not as it was before the clone.
+    $entry = [pscustomobject]@{name = $Name; path = $Path; url = $url}
+    $configLock = Enter-ConfigLock
+    try {
+        $libraries = @(Get-ConfiguredLibraries)
+        $current = Find-KnownLibrary $libraries $key
+        if ($current) {
+            $entry.name = $current.name
+            $libraries = @($libraries | ForEach-Object { if ($_ -eq $current) { $entry } else { $_ } })
+        } else {
+            if (@($libraries | Where-Object { $_.name -eq $entry.name }).Count) { throw "A library named $($entry.name) is connected already; pass -Name." }
+            $libraries = @($libraries | Where-Object { [IO.Path]::GetFullPath($_.path) -ne $Path }) + $entry
+        }
+        Write-SkillariumConfig (Read-SkillariumConfig) $libraries (Get-PreferredLibraries)
+    } finally { $configLock.Dispose() }
+    $Name = $entry.name
 
     $app = $null
     if (-not $NoApp -and -not $FromApp) { $app = Install-App }
@@ -157,7 +237,7 @@ try {
         & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $engine 'scripts\skillarium.ps1') enable-updates
     }
     if ($app -and -not $NoLaunch -and (Test-Path -LiteralPath $app)) { Start-Process -FilePath $app }
-    Write-Output "CONNECTED: $url in $Path"
+    Write-Output "CONNECTED: $url in $Path as $Name ($($libraries.Count) libraries connected)"
 } catch {
     # One plain line for the terminal and the app, not a PowerShell error record.
     [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")

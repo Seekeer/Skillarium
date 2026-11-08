@@ -1,9 +1,9 @@
-// Runs the engine's projects command against a library; the shell scripts own all file and Git changes.
+// Runs the engine's projects command; the shell scripts own all file and Git changes.
 const { execFile } = require('node:child_process');
+const os = require('node:os');
 const path = require('node:path');
-const fs = require('node:fs');
+const { isLibrary } = require('./libraries.cjs');
 
-const script = process.platform === 'win32' ? 'projects.ps1' : 'projects.sh';
 // A development checkout runs the repository itself; the packaged app switches to
 // the engine it deployed (main/engine.cjs) before the first call.
 const repositoryRoot = path.resolve(__dirname, '..', '..');
@@ -17,38 +17,39 @@ function enginePath() {
   return engine;
 }
 
-function isLibrary(folder) {
-  return Boolean(folder) && fs.existsSync(path.join(folder, 'sources.json'))
-    && fs.existsSync(path.join(folder, 'agent-skills.json'));
-}
-
-function command(library, args) {
-  if (process.platform === 'win32') {
+// library: a folder or a connected library's name; without it the engine takes the first
+// connected library. Links and bindings always cover every connected library.
+function command(library, args, platform = process.platform) {
+  if (platform === 'win32') {
     return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', path.join(engine, script), '-Library', library, ...args]];
+      '-File', path.join(engine, 'projects.ps1'), ...(library ? ['-Library', library] : []), ...args]];
   }
-  return ['bash', [path.join(engine, script), '--library', library, ...args]];
+  return ['bash', [path.join(engine, 'projects.sh'), ...(library ? ['--library', library] : []), ...args]];
 }
 
 // Connects this machine to a library with the engine's client setup; the token travels in a
 // private file that is removed right after. The app is already installed: no download.
-function connectCommand(url, folder, tokenFile) {
-  if (process.platform === 'win32') {
+// Another library goes to the end of the connected ones; without a folder or a name the
+// client setup picks them (Skillarium/<name>, the repository name).
+function connectCommand({ url, folder, name, tokenFile }, platform = process.platform) {
+  if (platform === 'win32') {
     return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', path.join(engine, 'scripts', 'setup-client.ps1'), '-Library', url, '-Path', folder,
-      '-TokenFile', tokenFile, '-FromApp']];
+      '-File', path.join(engine, 'scripts', 'setup-client.ps1'), '-Library', url,
+      ...(folder ? ['-Path', folder] : []), ...(name ? ['-Name', name] : []), '-TokenFile', tokenFile, '-FromApp']];
   }
-  return ['bash', [path.join(engine, 'scripts', 'setup-client.sh'), '--library', url, '--path', folder,
-    '--token-file', tokenFile, '--from-app']];
+  return ['bash', [path.join(engine, 'scripts', 'setup-client.sh'), '--library', url,
+    ...(folder ? ['--path', folder] : []), ...(name ? ['--name', name] : []), '--token-file', tokenFile, '--from-app']];
 }
 
 // Resolves with the exit code, the JSON line printed for the UI and the remaining messages.
-function runProjects(library, args) {
-  return execute(command(library, args), library);
+// folder: where the command runs (a library folder; the home folder otherwise).
+function runProjects(library, args, folder = library) {
+  const cwd = folder && path.isAbsolute(folder) && isLibrary(folder) ? folder : os.homedir();
+  return execute(command(library, args), cwd);
 }
 
-function connect(url, folder, tokenFile) {
-  return execute(connectCommand(url, folder, tokenFile), path.dirname(tokenFile));
+function connect(request) {
+  return execute(connectCommand(request), path.dirname(request.tokenFile));
 }
 
 function execute([file, argv], cwd) {
@@ -68,4 +69,4 @@ function execute([file, argv], cwd) {
   });
 }
 
-module.exports = { repositoryRoot, useEngine, enginePath, isLibrary, runProjects, connect };
+module.exports = { repositoryRoot, useEngine, enginePath, isLibrary, runProjects, connect, command, connectCommand };

@@ -14,29 +14,92 @@ export const CELL_TEXT = {
   pending: 'ждёт применения',
   conflict: 'место занято',
   'missing-skill': 'нет в библиотеке',
+  'library-missing': 'библиотека не подключена',
+  'library-unavailable': 'библиотека недоступна',
   unavailable: 'папка недоступна',
 };
 
+// Project entries whose skill is not a row of the library list, by the reason.
+const MISSING_TAG = {
+  'library-missing': 'библиотека не подключена',
+  'library-unavailable': 'библиотека недоступна',
+};
+
+const skillOf = (entry) => entry.skill || entry.name;
+
+// Whether a project entry is the copy a row stands for. Older engines report no library:
+// their entries are the copy linked globally.
+function sameCopy(entry, row) {
+  if (skillOf(entry) !== row.name) return false;
+  if (entry.library === undefined) return row.active;
+  if (entry.library === null) return !row.inLibrary && row.library === null && row.entry === entry.name;
+  return entry.library === row.library;
+}
+
+// One row per copy: a skill in several libraries has a row for each, the linked one first.
 export function buildMatrix(status) {
-  const rows = status.skills.map((skill) => ({ name: skill.name, inLibrary: true, global: skill.global,
-    update: skill.update || null }));
-  const known = new Set(rows.map((row) => row.name));
+  const libraries = status.libraries || [];
+  const multiple = libraries.length > 1;
+  const rank = (name) => { const index = libraries.findIndex((library) => library.name === name); return index < 0 ? libraries.length : index; };
+  const rows = status.skills.map((skill) => {
+    const active = skill.active !== false;
+    const library = skill.library ?? null;
+    return {
+      key: `${library ?? ''}|${skill.name}`, name: skill.name, library, entry: skill.entry || skill.name,
+      label: active ? skill.name : `${skill.name} (${library})`,
+      active, shadowedBy: skill.shadowedBy || null, copies: skill.copies || [], preferred: Boolean(skill.preferred),
+      inLibrary: true, missing: null, global: skill.global, update: skill.update || null,
+    };
+  });
   for (const project of status.projects) {
     for (const entry of project.skills) {
-      if (!known.has(entry.name)) {
-        known.add(entry.name);
-        rows.push({ name: entry.name, inLibrary: false, global: null, update: null });
-      }
+      if (rows.some((row) => sameCopy(entry, row))) continue;
+      const library = entry.library ?? null;
+      const name = skillOf(entry);
+      const qualified = library !== null || entry.name !== name;
+      rows.push({
+        key: `${library ?? ''}|${library === null ? entry.name : name}`, name, library, entry: entry.name,
+        label: !qualified ? name : library === null ? entry.name : `${name} (${library})`,
+        active: !qualified, shadowedBy: null, copies: [], preferred: false,
+        inLibrary: false, missing: MISSING_TAG[entry.state] || 'нет в библиотеке', global: null, update: null,
+      });
     }
   }
-  rows.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
-  return { rows, projects: status.projects };
+  rows.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    || Number(right.active) - Number(left.active) || rank(left.library) - rank(right.library));
+  return { rows, projects: status.projects, libraries, multiple };
 }
 
-export function cellOf(project, name) {
-  return project.skills.find((entry) => entry.name === name) || null;
+// Rows of one library; '' shows all of them.
+export function filterRows(rows, library) {
+  return library ? rows.filter((row) => row.library === library) : rows;
 }
 
+export function cellOf(project, row) {
+  return project.skills.find((entry) => sameCopy(entry, row)) || null;
+}
+
+// The sync line of one library in the list.
+export function syncCaption(library) {
+  if (!library.available) return { tone: 'error', text: 'папка библиотеки недоступна' };
+  const sync = library.sync;
+  if (!sync) return { tone: 'none', text: 'ещё не синхронизировалась' };
+  const when = new Date(sync.time);
+  const at = Number.isNaN(when.getTime()) ? '' : ` ${when.toLocaleString('ru-RU')}`;
+  if (sync.ok) return { tone: 'ok', text: `синхронизирована${at}` };
+  return { tone: 'error', text: `синхронизация не удалась${at}`, error: sync.error || '' };
+}
+
+// The order of the connected libraries after moving one of them up (-1) or down (+1);
+// null when it cannot move. Libraries given only for this run are not in the order.
+export function moveLibrary(libraries, name, delta) {
+  const names = libraries.filter((library) => library.configured !== false).map((library) => library.name);
+  const from = names.indexOf(name);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= names.length) return null;
+  [names[from], names[to]] = [names[to], names[from]];
+  return names;
+}
 // Update policy of an external skill; pending: switched here, not yet merged into the library.
 export function policyCaption(update) {
   if (update.pending) return 'Ждёт принятия';
@@ -179,10 +242,16 @@ export function problems(status) {
         list.push({ key: `${project.path}|${entry.name}`, text: `«${entry.name}» не подключён к «${name}»: место занято другой папкой или ссылкой. Она сохранена; освободите место, и подключение завершится при следующей синхронизации.`, paths: conflictPaths(entry.links) });
       } else if (entry.state === 'missing-skill') {
         list.push({ key: `${project.path}|${entry.name}`, text: `«${entry.name}» есть в списке «${name}», но отсутствует в библиотеке.`, paths: [] });
+      } else if (entry.state === 'library-missing') {
+        list.push({ key: `${project.path}|${entry.name}`, text: `«${entry.name}» есть в списке «${name}», но его библиотека не подключена на этом компьютере. Скилл подключится, когда вы подключите эту библиотеку.`, paths: [] });
+      } else if (entry.state === 'library-unavailable') {
+        list.push({ key: `${project.path}|${entry.name}`, text: `«${skillOf(entry)}» в «${name}»: папка библиотеки «${entry.library}» недоступна. Ссылки сохранены; подключение продолжится, когда папка вернётся.`, paths: [] });
       }
     }
   }
+  // Global links belong to the copy that wins its name; another copy's links point elsewhere.
   for (const skill of status.skills) {
+    if (skill.active === false) continue;
     const paths = conflictPaths(skill.global.links);
     if (!paths.length) continue;
     list.push({

@@ -25,8 +25,14 @@ Usage: skillarium <command>
                                  install a release (first installation or a fixed version)
   enable-updates | disable-updates
                                  hourly self-update task (machines without the app)
-  client ...                     connect this machine to a library (skillarium client -Help)
+  client ...                     connect a library; another URL adds one more (skillarium client -Help)
+  libraries                      connected libraries, their order, sync state and name conflicts
+  libraries order <library>...   put these libraries first: an earlier one wins a skill name
+  prefer <skill> <library>|auto  take this library's copy of a skill on this machine
+  disconnect <library> [--force] remove a library's links and connection; its clone stays
   updates                        pending updates of external skills and conflicts
+                                 (updates, review, approve, resolve, policy, add take
+                                 --library <name>; default: the first library)
   review <skill>                 what an update changes (diff, versions, conflict copy)
   approve <skill> <commit>       accept exactly the reviewed result
   resolve <skill> <commit> keep-ours|take-upstream|merged
@@ -87,14 +93,23 @@ function Write-Text {
 
 function Get-ConfigPath { Join-Path $env:APPDATA 'Skillarium\config.json' }
 
-function Get-LibraryPath {
-    if ($env:SKILLARIUM_LIBRARY) { return $env:SKILLARIUM_LIBRARY }
+# Every library this machine uses: all connected ones, plus SKILLARIUM_LIBRARY when it is a
+# folder outside them (a name there means one of the connected libraries).
+function Get-LibraryPaths {
+    $entries = @()
     $config = Get-ConfigPath
     if (Test-Path -LiteralPath $config) {
-        $value = (Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json).library
-        if ($value) { return [string]$value }
+        $value = Get-Content -LiteralPath $config -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $value.libraries) { $entries = @($value.libraries | Where-Object { $_.path }) }
+        elseif ($value.library) { $entries = @([pscustomobject]@{ name = ''; path = [string]$value.library }) }
     }
-    return $null
+    $paths = @($entries | ForEach-Object { [string]$_.path })
+    $override = $env:SKILLARIUM_LIBRARY
+    if ($override -and -not ($override -notmatch '[\\/:]' -and @($entries | Where-Object { $_.name -ceq $override }).Count) -and
+        $paths -notcontains $override) {
+        $paths += $override
+    }
+    return $paths
 }
 
 # Highest format of the library working tree and its shared branch; $null without a library.
@@ -151,19 +166,22 @@ function Read-Feed {
         Url = [string]$entry.url; Sha512 = [string]$entry.sha512; Size = [long]$entry.size; Document = $document }
 }
 
+# A release is installed only when it understands every connected library.
 function Test-Compatible {
     param($Feed)
-    $format = Get-LibraryFormat (Get-LibraryPath)
-    if ($null -eq $format) { return $true }
-    if ($format -gt $Feed.Max) {
-        Write-Warning "Skillarium $($Feed.Version) supports library format up to $($Feed.Max); the library has $format. Skipped."
-        return $false
+    $ok = $true
+    foreach ($library in @(Get-LibraryPaths)) {
+        $format = Get-LibraryFormat $library
+        if ($null -eq $format) { continue }
+        if ($format -gt $Feed.Max) {
+            Write-Warning "Skillarium $($Feed.Version) supports library format up to $($Feed.Max); the library has $format ($library). Skipped."
+            $ok = $false
+        } elseif ($format -lt $Feed.Min) {
+            Write-Warning "Skillarium $($Feed.Version) needs library format $($Feed.Min) or newer; the library has $format ($library). Skipped."
+            $ok = $false
+        }
     }
-    if ($format -lt $Feed.Min) {
-        Write-Warning "Skillarium $($Feed.Version) needs library format $($Feed.Min) or newer; the library has $format. Skipped."
-        return $false
-    }
-    return $true
+    return $ok
 }
 
 function Get-Release {
@@ -364,17 +382,19 @@ function Show-SkillariumStatus {
     }
     $skip = Join-Path $root 'skip'
     if (Test-Path -LiteralPath $skip) { Write-Output "Skipped after rollback: $((Get-Content -LiteralPath $skip -Raw).Trim())" }
-    $library = Get-LibraryPath
-    if (-not $library) { Write-Output 'Library: not configured'; return }
-    $format = Get-LibraryFormat $library
+    $libraries = @(Get-LibraryPaths)
+    if (-not $libraries.Count) { Write-Output 'Library: not configured'; return }
     $supported = $null
     $locate = Join-Path $root 'current\scripts\locate.ps1'
     if (Test-Path -LiteralPath $locate) {
         $line = Select-String -LiteralPath $locate -Pattern '^\$supportedFormat = (\d+)' | Select-Object -First 1
         if ($line) { $supported = [int]$line.Matches[0].Groups[1].Value }
     }
-    $mode = if ($null -ne $format -and $null -ne $supported -and $format -gt $supported) { 'read-only (update Skillarium)' } else { 'normal' }
-    Write-Output "Library: $library; format $(if ($null -ne $format) { $format } else { 'unknown' }), engine supports $(if ($supported) { $supported } else { 'unknown' }); mode: $mode"
+    foreach ($library in $libraries) {
+        $format = Get-LibraryFormat $library
+        $mode = if ($null -ne $format -and $null -ne $supported -and $format -gt $supported) { 'read-only (update Skillarium)' } else { 'normal' }
+        Write-Output "Library: $library; format $(if ($null -ne $format) { $format } else { 'unknown' }), engine supports $(if ($supported) { $supported } else { 'unknown' }); mode: $mode"
+    }
 }
 
 $command = if ($args.Count) { [string]$args[0] } else { 'help' }
@@ -394,9 +414,36 @@ try {
             & (Join-Path $root 'current\scripts\setup-client.ps1') @rest
             $code = $LASTEXITCODE
         }
-        { $_ -in @('updates', 'review', 'approve', 'resolve', 'policy') } {
-            # The library's update review lives in the installer; the library comes from the configuration.
+        { $_ -in @('libraries', 'disconnect', 'prefer') } {
             if (-not (Get-CurrentVersion)) { throw 'Skillarium is not installed: skillarium install.' }
+            $projectArgs = @($rest)
+            if ($command -eq 'libraries') {
+                if ($rest.Count -and $rest[0] -eq 'order' -and $rest.Count -ge 2) { $projectArgs = @('order') + @($rest | Select-Object -Skip 1) }
+                elseif ($rest.Count) { throw 'Usage: skillarium libraries [order <library>...]' }
+                else { $projectArgs = @('libraries') }
+            } elseif ($command -eq 'disconnect') {
+                if ($rest.Count -lt 1 -or $rest.Count -gt 2) { throw 'Usage: skillarium disconnect <library> [--force]' }
+                $projectArgs = @('disconnect') + @($rest)
+            } else {
+                if ($rest.Count -ne 2) { throw 'Usage: skillarium prefer <skill> <library>|auto' }
+                $projectArgs = @('prefer') + @($rest)
+            }
+            if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+                -File (Join-Path $root 'current\projects.ps1') @projectArgs
+            $code = $LASTEXITCODE
+        }
+        { $_ -in @('updates', 'review', 'approve', 'resolve', 'policy') } {
+            # The library's update review lives in the installer: the first connected library,
+            # or the one given with --library <name>.
+            if (-not (Get-CurrentVersion)) { throw 'Skillarium is not installed: skillarium install.' }
+            $libraryName = $null
+            $index = [Array]::IndexOf([string[]]@($rest), '--library')
+            if ($index -ge 0) {
+                if ($index + 1 -ge $rest.Count) { throw '--library needs a library name.' }
+                $libraryName = [string]$rest[$index + 1]
+                $rest = @(for ($i = 0; $i -lt $rest.Count; $i++) { if ($i -ne $index -and $i -ne $index + 1) { $rest[$i] } })
+            }
             $positional = @{ updates = @(); review = @('Skill'); approve = @('Skill', 'Commit'); resolve = @('Skill', 'Commit', 'Strategy')
                 policy = @('Skill', 'Policy') }[$command]
             if ($rest.Count -ne $positional.Count) {
@@ -408,6 +455,7 @@ try {
             if ($command -eq 'policy' -and $rest[1] -notin @('auto', 'confirm')) { throw 'The policy is auto or confirm.' }
             $installerArgs = @('-Mode', ($command.Substring(0, 1).ToUpper() + $command.Substring(1)))
             for ($i = 0; $i -lt $positional.Count; $i++) { $installerArgs += @(('-' + $positional[$i]), [string]$rest[$i]) }
+            if ($libraryName) { $installerArgs += @('-Library', $libraryName) }
             if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
             & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass `
                 -File (Join-Path $root 'current\install.ps1') @installerArgs

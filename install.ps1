@@ -23,7 +23,17 @@ if ($Mode -eq 'Uninstall') {
     Write-Output 'Hourly task removed. Skills and junctions were kept.'
     return
 }
+# Every library was disconnected (an empty list, unlike a machine never connected).
+if ($Mode -in @('Sync', 'Link') -and -not $Library -and -not $env:SKILLARIUM_LIBRARY -and
+    -not (Test-LibraryFolder $engine) -and -not @(Get-ConfiguredLibraries).Count -and (Test-LibrariesConfigured)) {
+    Write-Output 'No library is connected; nothing to sync.'
+    return
+}
 $repo = Resolve-Library -Explicit $Library -Engine $engine
+# Without an explicit library a synchronization covers every connected library.
+$explicit = [bool]($Library -or $env:SKILLARIUM_LIBRARY -or (Test-LibraryFolder $engine))
+# A disconnected library must not come back through a run that only started with it.
+$commandLibrary = if ($explicit) { $repo } else { '' }
 
 function Invoke-Git {
     param([string[]]$GitArgs, [string]$Directory = $repo)
@@ -32,13 +42,35 @@ function Invoke-Git {
     return $output
 }
 
-$lockPath = Invoke-Git -GitArgs @('rev-parse', '--git-path', 'agent-skills-sync.lock')
-if (-not [IO.Path]::IsPathRooted($lockPath)) { $lockPath = Join-Path $repo $lockPath }
-try {
-    $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-} catch [IO.IOException] {
-    Write-Output 'Another sync is running or the lock is unavailable; skipped.'
-    return
+# The lock of one library clone; $null while another run holds it.
+function Open-LibraryLock {
+    $path = Invoke-Git -GitArgs @('rev-parse', '--git-path', 'agent-skills-sync.lock')
+    if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $repo $path }
+    try { return [IO.File]::Open($path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+    catch [IO.IOException] { return $null }
+}
+
+# Fetch and publish one library; its failure is recorded (and sets $failed) without
+# stopping the others. Its messages stay on the output, so nothing is returned.
+function Sync-LibraryClone {
+    param([string]$Path)
+    $repo = $Path
+    $libraryLock = Open-LibraryLock
+    if (-not $libraryLock) { Write-Output "Another sync of $Path is running; skipped."; $script:busy = $true; return }
+    try {
+        Sync-Repository
+        Write-SyncStatus -Path $Path -Ok $true
+    } catch {
+        Write-Warning "${Path}: $($_.Exception.Message)"
+        Write-SyncStatus -Path $Path -Ok $false -Message $_.Exception.Message
+        $script:failed = $true
+    } finally { $libraryLock.Dispose() }
+}
+
+$lock = $null
+if ($Mode -notin @('Install', 'Sync', 'Link')) {
+    $lock = Open-LibraryLock
+    if (-not $lock) { Write-Output 'Another sync is running or the lock is unavailable; skipped.'; return }
 }
 $failed = $false
 $previousEncoding = [Console]::OutputEncoding
@@ -71,10 +103,34 @@ try {
     }
     . (Join-Path $engine 'scripts\bindings.ps1')
     if ($Mode -ne 'Link') {
-        try { Sync-Repository }
-        catch { Write-Warning $_.Exception.Message; $failed = $true }
+        $targets = @($repo)
+        if (-not $explicit) {
+            $targets = @()
+            foreach ($item in @(Get-ConfiguredLibraries)) {
+                if (Test-LibraryFolder $item.path) { $targets += Get-LongPath $item.path }
+                else { Write-Warning "Library $($item.name) is unavailable: $($item.path)"; $failed = $true }
+            }
+        }
+        $busy = $false
+        foreach ($target in $targets) {
+            Sync-LibraryClone $target
+        }
+        # The one library given explicitly is being synced by another run, which also links.
+        if ($explicit -and $busy) { return }
     }
-    # Global links and registered project bindings follow the local choices.
+    # Global links and registered project bindings of all libraries follow the local choices.
+    $lock = Enter-BindingsLock
+    # A library installed by hand joins the connected ones, so the hourly task needs no
+    # argument and keeps syncing all of them. The legacy layout keeps its own arguments.
+    $legacy = (Get-LongPath $engine) -eq $repo
+    $configured = @(Get-ConfiguredLibraries)
+    $known = @($configured | Where-Object { (Test-LibraryFolder $_.path) -and (Get-LongPath $_.path) -eq $repo }).Count
+    if ($Mode -eq 'Install' -and $explicit -and -not $legacy -and -not $known) {
+        $url = [string](Invoke-QuietGit -Directory $repo -GitArgs @('config', '--get', 'remote.origin.url'))
+        $entry = [pscustomobject]@{name = (Get-NewLibraryName $repo $configured); path = $repo; url = $url}
+        Write-SkillariumConfig (Read-SkillariumConfig) (@($configured) + $entry) (Get-PreferredLibraries)
+        Write-Output "CONNECTED: $repo as $($entry.name)"
+    }
     Read-Bindings
     if (-not (Sync-Bindings)) { throw 'Some skill links could not be applied; existing files were preserved.' }
     if (-not (Install-BuiltinSkills)) { throw 'Some built-in skills could not be linked; existing files were preserved.' }
@@ -93,10 +149,12 @@ try {
         if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
             throw 'Windows Script Host is required for background synchronization.'
         }
-        # The engine runs the library given here; the legacy layout keeps its old arguments.
+        # Connected libraries come from the configuration; a library given only to this
+        # command is passed on, and the legacy layout keeps its old arguments.
         $taskArguments = "//B //NoLogo `"$launcher`""
-        if ((Get-LongPath $runner) -ne $repo) { $taskArguments += " `"$repo`"" }
-        $action = New-ScheduledTaskAction -Execute $hostPath -Argument $taskArguments -WorkingDirectory $repo
+        $connected = @(Get-ConfiguredLibraries | Where-Object { (Test-LibraryFolder $_.path) -and (Get-LongPath $_.path) -eq $repo }).Count
+        if ((Get-LongPath $runner) -ne $repo -and -not $connected) { $taskArguments += " `"$repo`"" }
+        $action = New-ScheduledTaskAction -Execute $hostPath -Argument $taskArguments -WorkingDirectory $runner
     }
     if ($Mode -eq 'Install') {
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddHours(1) -RepetitionInterval (New-TimeSpan -Hours 1)
@@ -104,8 +162,9 @@ try {
         $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Synchronize personal agent skills hourly while logged in.' -Force | Out-Null
         Write-Output "Installed: $taskName"
-    } elseif ($Mode -eq 'Sync') {
-        # Upgrade existing installations without changing their schedule or identity.
+    } elseif ($Mode -eq 'Sync' -and -not ((Get-LongPath $runner) -ne $repo -and -not $connected -and -not $legacy)) {
+        # Upgrade existing installations without changing their schedule or identity; a sync
+        # of a library given only to this command must not narrow the task to it.
         $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($task -and ($task.Actions.Count -ne 1 -or
             $task.Actions[0].Execute -ne $action.Execute -or
@@ -119,5 +178,5 @@ try {
     foreach ($key in $previousEnv.Keys) {
         [Environment]::SetEnvironmentVariable($key, $previousEnv[$key], 'Process')
     }
-    $lock.Dispose()
+    if ($lock) { $lock.Dispose() }
 }

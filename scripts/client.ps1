@@ -274,13 +274,17 @@ function Get-ApiBase {
 }
 
 $script:apiAuthorization = $null
+$script:apiAuthorizationOrigin = $null
 
-# Credentials come from the Git credential helper; errors never include them.
+# Credentials come from the Git credential helper; errors never include them. They are
+# cached per scheme and host: libraries of one run may live on different hosts.
 function Invoke-Api {
     param([string]$Method, [string]$Path, $Body = $null)
     $base = Get-ApiBase
+    $uri = [Uri]$base
+    $origin = "$($uri.Scheme)://$($uri.Authority)".ToLowerInvariant()
+    if ($script:apiAuthorizationOrigin -ne $origin) { $script:apiAuthorization = $null }
     if (-not $script:apiAuthorization) {
-        $uri = [Uri]$base
         $authority = $uri.Authority
         $request = "protocol=$($uri.Scheme)`nhost=$authority`n`n"
         # A console input encoding with a BOM (Windows "UTF-8 for worldwide language support")
@@ -295,6 +299,7 @@ function Invoke-Api {
         if ($LASTEXITCODE -ne 0 -or -not $values['password']) { throw 'Hosting credentials are unavailable; publication pending.' }
         $pair = [Text.Encoding]::UTF8.GetBytes("$($values['username']):$($values['password'])")
         $script:apiAuthorization = 'Basic ' + [Convert]::ToBase64String($pair)
+        $script:apiAuthorizationOrigin = $origin
     }
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $web = [Net.HttpWebRequest]::Create($base + $Path)
@@ -526,6 +531,9 @@ function Install-BuiltinSkills {
         if ($name -cnotmatch '^[a-z0-9]+(-[a-z0-9]+)*$') { continue }
         if (-not (Test-Path -LiteralPath (Join-Path $folder.FullName 'SKILL.md') -PathType Leaf)) { continue }
         if (Test-Path -LiteralPath (Join-Path $repo "skills\$name")) { continue }
+        # Any connected library with this skill wins over the engine's own copy.
+        $copies = Get-Variable -Name copies -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if ($copies -and $copies.ContainsKey($name)) { continue }
         $target = Join-Path $root $name
         foreach ($catalog in Get-LinkRoots) {
             $destination = Join-Path $catalog $name
