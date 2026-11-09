@@ -30,8 +30,14 @@ Usage: skillarium <command>
   enable-updates | disable-updates
                                  hourly self-update timer (machines without the app)
   server ...                     set up the library server (see: skillarium server --help)
-  client ...                     connect this machine to a library (see: skillarium client --help)
+  client ...                     connect a library; another URL adds one more (see: skillarium client --help)
+  libraries                      connected libraries, their order, sync state and name conflicts
+  libraries order <library>...   put these libraries first: an earlier one wins a skill name
+  prefer <skill> <library>|auto  take this library's copy of a skill on this machine
+  disconnect <library> [--force] remove a library's links and connection; its clone stays
   updates                        pending updates of external skills and conflicts
+                                 (updates, review, approve, resolve, policy, add take
+                                 --library <name>; default: the first library)
   review <skill>                 what an update changes (diff, versions, conflict copy)
   approve <skill> <commit>       accept exactly the reviewed result
   resolve <skill> <commit> keep-ours|take-upstream|merged
@@ -137,12 +143,52 @@ channel() {
 
 skillarium_config() { printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/skillarium/config.json"; }
 
-library_path() {
+# Every library this machine uses, one per line: all connected ones, plus SKILLARIUM_LIBRARY
+# when it is a folder outside them (a name there means one of the connected libraries).
+library_paths() {
+    local override=${SKILLARIUM_LIBRARY:-} connected names
+    connected=$(connected_library_paths)
+    [[ -z "$connected" ]] || printf '%s\n' "$connected"
+    [[ -n "$override" ]] || return 0
+    if [[ "$override" != */* && "$override" != *:* ]]; then
+        names=$(connected_library_names)
+        grep -Fxq -- "$override" <<<"$names" && return 0
+    fi
+    grep -Fxq -- "$override" <<<"$connected" || printf '%s\n' "$override"
+}
+
+connected_library_names() {
     local config
-    if [[ -n "${SKILLARIUM_LIBRARY:-}" ]]; then echo "$SKILLARIUM_LIBRARY"; return; fi
     config=$(skillarium_config)
-    [[ -f "$config" ]] && json_field library <"$config"
-    return 0
+    [[ -f "$config" ]] || return 0
+    if have jq; then
+        jq -r '.libraries[]? | objects | .name | strings' -- "$config" 2>/dev/null || true
+    else
+        py -c 'import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+for i in d.get("libraries") or []:
+    if isinstance(i, dict) and isinstance(i.get("name"), str):
+        print(i["name"])' "$config" || true
+    fi
+}
+
+connected_library_paths() {
+    local config
+    config=$(skillarium_config)
+    [[ -f "$config" ]] || return 0
+    if have jq; then
+        jq -r 'if .libraries != null then .libraries[]? | objects | .path | strings | select(. != "")
+               elif (.library | type) == "string" and .library != "" then .library else empty end' -- "$config"
+    else
+        py -c 'import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+if d.get("libraries") is not None:
+    paths = [i["path"] for i in d["libraries"] or [] if isinstance(i, dict) and isinstance(i.get("path"), str) and i["path"]]
+else:
+    paths = [d["library"]] if isinstance(d.get("library"), str) and d["library"] else []
+for path in paths:
+    print(path)' "$config"
+    fi
 }
 
 # Highest format of the library working tree and its shared branch; empty without a library.
@@ -193,19 +239,22 @@ read_feed() {
         die "invalid release feed: $url"
 }
 
-# The release must read the library: its formats cover the library's format.
+# A release is installed only when it reads every connected library: its formats cover theirs.
 compatible() {
-    local format
-    format=$(library_format "$(library_path)")
-    [[ -z "$format" ]] && return 0
-    if ((format > f_max)); then
-        echo "Skillarium $f_version supports library format up to $f_max; the library has $format. Skipped." >&2
-        return 1
-    fi
-    if ((format < f_min)); then
-        echo "Skillarium $f_version needs library format $f_min or newer; the library has $format. Skipped." >&2
-        return 1
-    fi
+    local library format ok=0
+    while IFS= read -r library; do
+        [[ -n "$library" ]] || continue
+        format=$(library_format "$library")
+        [[ -n "$format" ]] || continue
+        if ((format > f_max)); then
+            echo "Skillarium $f_version supports library format up to $f_max; the library has $format ($library). Skipped." >&2
+            ok=1
+        elif ((format < f_min)); then
+            echo "Skillarium $f_version needs library format $f_min or newer; the library has $format ($library). Skipped." >&2
+            ok=1
+        fi
+    done < <(library_paths)
+    return "$ok"
 }
 
 # Downloads, verifies and unpacks f_version into versions/ unless it is already there.
@@ -354,20 +403,23 @@ cmd_rollback() {
 }
 
 cmd_status() {
-    local current library format supported mode
+    local current library libraries format supported mode
     current=$(current_version || true)
     echo "Skillarium: ${current:-not installed} ($(channel)) in $home"
     if [[ -d "$home/versions" ]]; then
         echo "Installed versions: $(cd -- "$home/versions" && ls -1 | tr '\n' ' ')"
     fi
     [[ -f "$home/skip" ]] && echo "Skipped after rollback: $(cat -- "$home/skip")"
-    library=$(library_path)
-    if [[ -z "$library" ]]; then echo 'Library: not configured'; return 0; fi
-    format=$(library_format "$library")
+    libraries=$(library_paths)
+    if [[ -z "$libraries" ]]; then echo 'Library: not configured'; return 0; fi
     supported=$(sed -n 's/^supported_format=\([0-9]*\)$/\1/p' "$home/current/scripts/locate.sh" 2>/dev/null || true)
-    mode=normal
-    [[ -n "$format" && -n "$supported" ]] && ((format > supported)) && mode='read-only (update Skillarium)'
-    echo "Library: $library; format ${format:-unknown}, engine supports ${supported:-unknown}; mode: $mode"
+    while IFS= read -r library; do
+        [[ -n "$library" ]] || continue
+        format=$(library_format "$library")
+        mode=normal
+        if [[ -n "$format" && -n "$supported" ]] && ((format > supported)); then mode='read-only (update Skillarium)'; fi
+        echo "Library: $library; format ${format:-unknown}, engine supports ${supported:-unknown}; mode: $mode"
+    done <<<"$libraries"
 }
 
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -448,7 +500,20 @@ case "$command" in
     disable-updates) cmd_disable_updates ;;
     server) run_role server/setup.sh "$@" ;;
     client) run_role scripts/setup-client.sh "$@" ;;
+    libraries|prefer|disconnect)
+        [[ -f "$home/current/VERSION" ]] || die 'Skillarium is not installed: skillarium install'
+        case "$command" in
+            libraries)
+                if (($# == 0)); then set -- libraries
+                elif (($# >= 2)) && [[ "$1" == order ]]; then :
+                else die 'usage: skillarium libraries [order <library>...]'; fi ;;
+            disconnect) (($# >= 1 && $# <= 2)) || die 'usage: skillarium disconnect <library> [--force]'; set -- disconnect "$@" ;;
+            prefer) (($# == 2)) || die 'usage: skillarium prefer <skill> <library>|auto'; set -- prefer "$@" ;;
+        esac
+        exec bash "$home/current/projects.sh" "$@" ;;
     updates|review|approve|resolve|policy)
+        # The library's update review lives in the installer: the first connected library,
+        # or the one given with --library <name>.
         [[ -f "$home/current/VERSION" ]] || die 'Skillarium is not installed: skillarium install'
         exec bash "$home/current/install.sh" "--$command" "$@" ;;
     add)

@@ -255,14 +255,18 @@ api_base() {
 api_body=''
 api_status=0
 api_credentials=''
+api_credentials_origin=''
 
 # Sets api_status/api_body. Credentials come from the Git credential helper and
-# are passed to curl through stdin, never on the command line.
+# are passed to curl through stdin, never on the command line. They are cached per
+# scheme and host: libraries of one run may live on different hosts.
 api_request() {
     local method=$1 path=$2 data=${3-} base output host scheme body_file
     base=$(api_base) || return 1
+    scheme=${base%%://*}; host=${base#*://}; host=${host%%/*}
+    if [[ "$api_credentials_origin" != "${scheme,,}://${host,,}" ]]; then api_credentials=''; fi
     if [[ -z "$api_credentials" ]]; then
-        scheme=${base%%://*}; host=${base#*://}; host=${host%%/*}
+        api_credentials_origin="${scheme,,}://${host,,}"
         api_credentials=$(printf 'protocol=%s\nhost=%s\n\n' "$scheme" "$host" |
             GIT_TERMINAL_PROMPT=0 git -C "$repo" -c credential.interactive=false credential fill 2>/dev/null) || api_credentials=''
         [[ "$api_credentials" == *password=* ]] || { api_credentials=''; echo 'Hosting credentials are unavailable; publication pending.' >&2; return 1; }
@@ -463,6 +467,8 @@ link_builtin_skills() {
         target=${folder%/}; name=${target##*/}
         [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || continue
         [[ ! -e "$repo/skills/$name" ]] || continue
+        # Any connected library with this skill wins over the engine's own copy.
+        if declare -p cat_copies >/dev/null 2>&1 && [[ -n "${cat_copies[$name]+present}" ]]; then continue; fi
         while IFS= read -r catalog; do
             link="$catalog/$name"
             if [[ -L "$link" && $(readlink -- "$link") == "$target" ]]; then continue; fi

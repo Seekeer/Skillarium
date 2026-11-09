@@ -57,6 +57,7 @@ class ProjectBindingTests(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.home), USERPROFILE=str(self.home),
                         XDG_CACHE_HOME=str(self.home / '.cache'), XDG_STATE_HOME=str(self.home / '.local/state'),
                         XDG_CONFIG_HOME=str(self.home / '.config'), LOCALAPPDATA=str(self.home / 'AppData/Local'),
+                        APPDATA=str(self.home / 'AppData/Roaming'),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', AGENT_SKILLS_LOCK_TIMEOUT='30',
                         GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
                         GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid')
@@ -88,46 +89,43 @@ class ProjectBindingTests(unittest.TestCase):
                 os.rmdir(path) if WINDOWS and os.path.isjunction(str(path)) else os.unlink(path)
         self.temp.cleanup()
 
-    def test_bindings_of_a_vanished_library_are_set_aside(self):
+    def test_links_into_a_vanished_temporary_library_are_cleaned(self):
         state = (self.home / 'AppData/Local/agent-skills' if WINDOWS else self.home / '.local/state/agent-skills')
         state = state / 'bindings.json'
         data = json.loads(state.read_text(encoding='utf-8'))
-        original = dict(data)
-        # A test run left state of a temporary library that is gone, with a link it owned.
+        # A test run left a link into a temporary library that is gone.
         vanished = self.root / 'deleted test library'
         target = vanished / 'skills' / 'ghost-skill'
         target.mkdir(parents=True)
         link = self.home / '.agents' / 'skills' / 'ghost-skill'
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if WINDOWS:
-            subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], check=True, capture_output=True)
-        else:
-            os.symlink(target, link)
+        make_link(link, target)
         shutil.rmtree(vanished)
+        # Links of a library that is only unavailable (a disconnected drive, a moved clone)
+        # or not connected here are never guessed away.
+        unavailable = ('Z:\\Skillarium\\unavailable library' if WINDOWS else '/nonexistent/skillarium library')
+        other = self.root / 'other library' / 'skills' / 'kept-skill'
+        other.mkdir(parents=True)
+        kept = self.home / '.agents' / 'skills' / 'kept-skill'
+        make_link(kept, other)
         data['library'] = str(vanished)
-        data['links'] = dict(data['links'], **{str(link): {'target': str(target), 'skill': 'ghost-skill',
-                                                           'project': None, 'exclude': None}})
+        data['links'] = dict(data['links'], **{
+            str(link): {'target': str(target), 'skill': 'ghost-skill', 'project': None, 'exclude': None},
+            str(self.home / '.claude' / 'skills' / 'offline-skill'): {
+                'target': unavailable + ('\\skills\\offline-skill' if WINDOWS else '/skills/offline-skill'),
+                'skill': 'offline-skill', 'project': None, 'exclude': None},
+            str(kept): {'target': str(other), 'skill': 'kept-skill', 'project': None, 'exclude': None}})
         state.write_text(json.dumps(data), encoding='utf-8')
-        self.assertIn('removed temporary library', self.background())
-        self.assertTrue(os.path.samefile(json.loads(state.read_text(encoding='utf-8'))['library'], self.library))
-        self.assertEqual(len(list(state.parent.glob('bindings.json.orphaned-*'))), 1)
+        output = self.background()
+        self.assertIn('UNLINKED', output)
+        saved = json.loads(state.read_text(encoding='utf-8'))
+        self.assertTrue(os.path.samefile(saved['library'], self.library))
         self.assertFalse(is_link(link) or link.exists())
-        # A library that is only unavailable (a disconnected drive, a moved clone) is never guessed away.
-        unavailable = 'Z:\\Skillarium\\unavailable library' if WINDOWS else '/nonexistent/skillarium library'
-        state.write_text(json.dumps(dict(original, library=unavailable)), encoding='utf-8')
-        self.assertIn('not available now', self.background(expected=1))
-        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], unavailable)
-        # State of a library that still exists is never taken over.
-        other = self.root / 'other library'
-        other.mkdir()
-        for name in ('sources.json', 'agent-skills.json'):
-            (other / name).write_text('{}', encoding='utf-8')
-        data['library'] = str(other)
-        state.write_text(json.dumps(data), encoding='utf-8')
-        self.assertIn('belong to another library', self.background(expected=1))
-        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], str(other))
+        self.assertNotIn(str(link), saved['links'])
+        self.assertIn(str(kept), saved['links'])
+        self.assertTrue(is_link(kept))
+        self.assertIn(str(self.home / '.claude' / 'skills' / 'offline-skill'), saved['links'])
 
-    def test_interrupted_cleanup_of_a_vanished_library_is_retried(self):
+    def test_exclude_cleanup_that_fails_is_retried(self):
         if not WINDOWS and os.geteuid() == 0:
             self.skipTest('root ignores the permissions that make cleanup fail')
         state = (self.home / 'AppData/Local/agent-skills' if WINDOWS else self.home / '.local/state/agent-skills')
@@ -136,23 +134,21 @@ class ProjectBindingTests(unittest.TestCase):
         exclude = self.root / 'project' / '.git' / 'info' / 'exclude'
         exclude.parent.mkdir(parents=True)
         exclude.write_text('# kept\n/.agents/skills/ghost-skill\n', encoding='utf-8', newline='\n')
-        data['library'] = str(self.root / 'deleted test library')
         data['excludes'] = {str(exclude): ['/.agents/skills/ghost-skill']}
         state.write_text(json.dumps(data), encoding='utf-8')
-        # The exclude file cannot be rewritten: cleanup stops and keeps everything.
+        # The exclude file cannot be rewritten: the run fails and keeps the record.
         locked = exclude if WINDOWS else exclude.parent
         mode = locked.stat().st_mode
         locked.chmod(0o444 if WINDOWS else 0o555)
         try:
-            self.assertIn('incomplete', self.background(expected=1))
+            self.assertIn('could not be applied', self.background(expected=1))
         finally:
             locked.chmod(mode)
-        self.assertEqual(json.loads(state.read_text(encoding='utf-8'))['library'], data['library'])
         self.assertIn('ghost-skill', exclude.read_text(encoding='utf-8'))
+        self.assertIn(str(exclude), json.loads(state.read_text(encoding='utf-8'))['excludes'])
         # Once the file is writable again, the next run finishes the cleanup.
-        self.assertIn('removed temporary library', self.background())
+        self.background()
         self.assertEqual(exclude.read_text(encoding='utf-8').strip(), '# kept')
-        self.assertTrue(os.path.samefile(json.loads(state.read_text(encoding='utf-8'))['library'], self.library))
 
     # Helpers -----------------------------------------------------------------
     def git(self, cwd, *args):
@@ -548,16 +544,18 @@ class ProjectBindingTests(unittest.TestCase):
         self.projects('unbind', project, OTHER, 'global')
         self.assert_project_unbound(project, OTHER)
         self.assertTrue(self.skill_status(OTHER)['global']['manual'])
-        # UI and background serialize on the library lock.
-        lock_path = self.git(self.library, 'rev-parse', '--absolute-git-dir') + '/agent-skills-sync.lock'
+        # UI and background serialize on the lock of the links, which span all libraries.
+        lock_path = Path(self.status()['state']).parent / 'bindings.lock'
         with open(lock_path, 'a') as lock:
             if not WINDOWS:
                 import fcntl
                 fcntl.flock(lock, fcntl.LOCK_EX)
-            self.assertIn('skipped', self.background())
+            background = self.run_client('install', *(['-Mode', 'Link'] if WINDOWS else ['--link-only']), wait=False)
             waiting = self.run_client('projects', 'unbind', str(project), SHARED, 'global', wait=False)
             time.sleep(2)
+            self.assertIsNone(background.poll())
             self.assertIsNone(waiting.poll())
+        self.assertEqual(background.wait(timeout=60), 0, background.communicate())
         self.assertEqual(waiting.wait(timeout=60), 0, waiting.communicate())
         self.assert_global(True)
         self.assert_project_unbound(project)

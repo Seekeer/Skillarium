@@ -34,6 +34,7 @@ class ExtractLineEndingTests(unittest.TestCase):
         self.source = dict(kind='git', url=source.as_uri(), path='skills/lf-skill', ref='refs/heads/main')
         # A Windows machine: Git for Windows ships core.autocrlf=true in its system config.
         self.env = dict(env, LOCALAPPDATA=str(self.root / 'cache'), XDG_CACHE_HOME=str(self.root / 'cache'),
+                        APPDATA=str(self.root / 'roaming'), XDG_CONFIG_HOME=str(self.root / 'config'),
                         GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='core.autocrlf', GIT_CONFIG_VALUE_0='true',
                         GIT_CONFIG_KEY_1='core.eol', GIT_CONFIG_VALUE_1='crlf')
 

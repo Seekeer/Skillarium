@@ -36,6 +36,7 @@ class Library:
         (self.root / 'global.gitconfig').write_text('')
         self.env = dict(os.environ, HOME=str(self.home), USERPROFILE=str(self.home),
                         XDG_CACHE_HOME=str(self.home / '.cache'), LOCALAPPDATA=str(self.home / 'AppData' / 'Local'),
+                        APPDATA=str(self.home / 'AppData' / 'Roaming'), XDG_CONFIG_HOME=str(self.home / '.config'),
                         GIT_CONFIG_GLOBAL=str(self.root / 'global.gitconfig'), GIT_CONFIG_NOSYSTEM='1',
                         GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@example.invalid',
                         GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@example.invalid',
@@ -132,7 +133,8 @@ class Library:
 
     def powershell(self, repo, mode='Sync', expected=0, home=None, extra=()):
         env = dict(self.env, HOME=str(home or self.home), USERPROFILE=str(home or self.home),
-                   LOCALAPPDATA=str((home or self.home) / 'AppData' / 'Local'))
+                   LOCALAPPDATA=str((home or self.home) / 'AppData' / 'Local'),
+                   APPDATA=str((home or self.home) / 'AppData' / 'Roaming'))
         result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                                  '-File', str(repo / 'install.ps1'), '-Mode', mode, *extra],
                                 env=env, capture_output=True, text=True, encoding='utf-8', errors='replace')
